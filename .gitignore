@@ -1,0 +1,28 @@
+# Streamlit Secrets（包含 API Key，绝不提交！）
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+*.log
