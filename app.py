@@ -11,6 +11,7 @@ import io
 import re
 import time
 import base64
+from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 import PyPDF2
@@ -154,6 +155,435 @@ CHECKLIST = """
 □ 9. 是否声明能力边界？
 □ 10. 是否列出技术依赖？
 """
+
+# 汇报助手的System Prompt
+REPORT_ASSISTANT_SYSTEM_PROMPT = """# Role: 资深职场沟通专家
+
+# Profile:
+你是一位擅长"向上管理"和"结构化表达"的职场助理。你能够将碎片化的工作信息转化为逻辑清晰、简明扼要、重点突出的汇报文案，专门用于向领导同步工作事项。
+
+# Goals:
+根据用户提供的【当前问题】、【解决方案】和【预期结果】，撰写一份给领导查看的工作同步文案。
+
+# Constraints & Guidelines:
+1. **结构清晰**：采用"结论先行"或"背景-行动-结果"的逻辑结构。
+2. **简明扼要**：去除冗余的修饰词，用词精准，避免过于口语化，但要通俗易懂。
+3. **逻辑通顺**：清晰地阐述前因后果，让领导一眼就能看懂为什么要这么做，以及这么做的好处。
+4. **格式规范**：适当使用分段、加粗或列表，提升阅读体验。
+5. **数学公式**：如果输入中包含数据计算或公式，请使用 $ 或 $$ 包裹公式。
+
+# Output Template (请严格参考此模板风格):
+
+**【主题】：关于[核心事项]的同步/汇报**
+
+**1. 现状与问题（Why）**
+简述当前背景，指出核心痛点。[当前问题]
+
+**2. 解决方案（How）**
+针对上述问题，拟定/采取以下措施：
+*   [解决方案的关键点1]
+*   [解决方案的关键点2]
+
+**3. 预期效果（What）**
+方案实施后，预计达到以下目标：
+*   [预期结果]
+"""
+
+# 周报助手的System Prompt
+WEEKLY_REPORT_SYSTEM_PROMPT = """Role: 你是一位资深的项目管理专家和运营分析师，擅长将零散的日常工作记录（日报）汇总、提炼并重构为逻辑清晰、重点突出的专业周报。
+
+Task: 请根据我提供的【本周日报/工作记录】，参考【目标风格范例】，生成一份高质量的周报。
+
+Constraints & Formatting Rules (重要):
+1. 纯文本格式：请不要使用任何 LaTeX 格式（如 $$ 或 $）。所有的数字、百分比、版本号直接使用普通文本显示（例如：-2%、35%、V420、1->5）。
+2. 结构复刻：必须严格遵守范例的层级结构。
+   - 一级标题使用 【标题】 格式（例如：【热门特辑：方向与机制对齐】）。
+   - 二级要点使用 ○关键词： 格式（例如：○方向对齐：...）。
+3. 内容提炼：
+   - 去重与合并：不要按"周一、周二"的时间流水账罗列。请将同一事项在不同日期的进展合并为一个条目，只保留最终结果或关键节点。
+   - 分类归纳：将内容按业务属性分类（如：策略调整、功能迭代、运营配置、审核流程、数据分析等）。
+4. 语言风格：
+   - 专业、精炼、客观。
+   - 多用动词名词搭配（如"完成对齐"、"明确逻辑"、"修复漏洞"）。
+   - 解释因果关系（如"为了缓解固化...调整了..."）。
+
+Reference Example (目标风格范例):
+
+【热门特辑：方向与机制对齐】
+○方向对齐： 完成内部与发行会议对齐，明确"特辑"分类来源逻辑，讨论配套H5鉴赏团机制，结合市场侧网红流量及作者主页增加曝光
+○特辑来源： 时效驱动（跟热点）、版本驱动（跟版本内容/IP）、兴趣驱动（跟玩家喜好），目标打造"每周必玩的限时派对"；第一期计划锁定"历史好图"圈定小主题
+○展示机制： 确定使用MAB算法，单次展示少量作品，通过动态轮播保证池内作品的曝光机会
+
+【推荐算法策略调整】
+○缓解固化： 分析头部固化问题，调整混排增加"热门趋势"多样性；分析"猜你喜欢"的集中曝光问题，新的双塔召回虽转化率微降（-2%），但头部效果有非常明显的改善
+○质量筛选： 新增平均对局时长的准入筛选条件，提高作品增长速度的权重，相对更优先推荐快速崛起的新内容
+
+【标签与审核流程优化】
+○阈值调整： 提高人审举报阈值（1→5），减少误报干扰
+○流程优化： 修复作品更新后，没有重新进入审核的问题；发现部分作者利用高频更新，短暂绕过标签流程，已报备11月26日Patch修复该漏洞
+"""
+
+# 白皮书助手的System Prompt
+WHITEPAPER_ASSISTANT_SYSTEM_PROMPT = """# Role: PUBGM WoW模式 版本文档撰写助理
+
+# Context:
+你正在协助整理PUBGM WoW模式（UGC玩法）的版本白皮书功能列表。用户会输入简单的功能关键词或短语，你需要将其扩写成一句标准、专业且信息量完整的版本功能陈述。
+
+# Goal:
+将简短的关键词扩写为标准的"功能点陈述句"。
+
+# Output Rules (Strict):
+1.  **句式结构**：请严格套用以下句式进行扩写：
+    `[序号]. 新增[功能名称]功能，支持[具体机制/操作方式]，用于[应用场景/关联的设备或系统]。`
+2.  **专业性**：使用PUBGM WoW模式的常用术语（如：可视化编程、自定义UI、全局变量、互动物体、武装AI等）。
+3.  **简洁性**：不要使用感叹号，不要发表评论，不要使用"快来试试"等营销词汇。只陈述事实。
+4.  **数学公式**：如果涉及数值逻辑，请使用 LaTeX 格式，例如 $y=x+1$。
+
+# Input Example:
+用户输入：动画生成
+输出：1. 新增动画生成功能，支持作者上传视频后生成对应骨骼动画，用于可视化编程控制武装AI和虚拟投影装置。
+
+用户输入：自定义UI
+输出：1. 新增自定义UI编辑器，支持创作者自由拖拽按钮与图片布局，用于制作个性化的游戏界面与交互菜单。
+
+# Workflow:
+1.  分析用户输入的关键词。
+2.  联想该功能在PUBGM WoW中的实际运作逻辑（机制）和用途（场景）。
+3.  按照规定句式输出。
+"""
+
+# ============================================
+# 会话历史管理
+# ============================================
+
+def init_session_history():
+    """初始化会话历史存储"""
+    if "session_history" not in st.session_state:
+        st.session_state.session_history = []
+
+
+# ============================================
+# 多轮对话管理
+# ============================================
+
+def init_chat_history(chat_key: str):
+    """
+    初始化指定功能的对话历史
+    
+    Args:
+        chat_key: 对话历史的键名（如 'generate_chat', 'report_chat' 等）
+    """
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = []
+
+def add_chat_message(chat_key: str, role: str, content: str):
+    """
+    添加消息到对话历史
+    
+    Args:
+        chat_key: 对话历史的键名
+        role: 角色（'user' 或 'assistant'）
+        content: 消息内容
+    """
+    init_chat_history(chat_key)
+    st.session_state[chat_key].append({
+        "role": role,
+        "content": content,
+        "timestamp": datetime.now().strftime("%H:%M:%S")
+    })
+
+def get_chat_history(chat_key: str) -> list:
+    """
+    获取对话历史
+    
+    Args:
+        chat_key: 对话历史的键名
+    
+    Returns:
+        对话历史列表
+    """
+    init_chat_history(chat_key)
+    return st.session_state[chat_key]
+
+def clear_chat_history(chat_key: str):
+    """
+    清空对话历史
+    
+    Args:
+        chat_key: 对话历史的键名
+    """
+    st.session_state[chat_key] = []
+
+def build_chat_context(chat_key: str, system_prompt: str, max_history: int = 10) -> str:
+    """
+    构建包含对话历史的上下文Prompt
+    
+    Args:
+        chat_key: 对话历史的键名
+        system_prompt: 系统提示词
+        max_history: 最大历史消息数量
+    
+    Returns:
+        包含历史上下文的完整Prompt
+    """
+    history = get_chat_history(chat_key)
+    
+    if not history:
+        return ""
+    
+    # 只取最近的N条历史
+    recent_history = history[-max_history:] if len(history) > max_history else history
+    
+    # 构建对话历史文本
+    history_text = "\n\n【对话历史】\n"
+    for msg in recent_history:
+        role_label = "用户" if msg["role"] == "user" else "助手"
+        history_text += f"{role_label}: {msg['content']}\n\n"
+    
+    return history_text
+
+def render_chat_interface(chat_key: str, system_prompt: str, container, 
+                          placeholder: str = "请输入您的问题或修改要求...",
+                          function_context: str = ""):
+    """
+    渲染多轮对话界面
+    
+    Args:
+        chat_key: 对话历史的键名
+        system_prompt: 系统提示词
+        container: Streamlit容器
+        placeholder: 输入框占位文本
+        function_context: 当前功能的上下文（如已生成的内容）
+    
+    Returns:
+        是否有新的对话产生
+    """
+    init_chat_history(chat_key)
+    history = get_chat_history(chat_key)
+    
+    # 显示对话历史
+    if history:
+        with container:
+            st.markdown("#### 💬 对话历史")
+            for i, msg in enumerate(history):
+                if msg["role"] == "user":
+                    st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
+                    st.info(msg["content"])
+                else:
+                    st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
+                    st.markdown(msg["content"])
+            st.markdown("---")
+    
+    # 用于控制对话输入的状态
+    chat_input_key = f"{chat_key}_input"
+    chat_processing_key = f"{chat_key}_processing"
+    
+    if chat_processing_key not in st.session_state:
+        st.session_state[chat_processing_key] = False
+    
+    # 对话输入区域
+    col_input, col_btn, col_clear = container.columns([6, 1, 1])
+    
+    with col_input:
+        user_message = st.text_input(
+            "继续对话",
+            placeholder=placeholder,
+            key=chat_input_key,
+            label_visibility="collapsed"
+        )
+    
+    with col_btn:
+        send_clicked = st.button("发送", key=f"{chat_key}_send", type="primary", use_container_width=True)
+    
+    with col_clear:
+        if st.button("清空", key=f"{chat_key}_clear", use_container_width=True):
+            clear_chat_history(chat_key)
+            st.rerun()
+    
+    return send_clicked, user_message, chat_processing_key
+
+def process_chat_message(chat_key: str, user_message: str, system_prompt: str, 
+                         function_context: str, output_container):
+    """
+    处理用户的对话消息并生成回复
+    
+    Args:
+        chat_key: 对话历史的键名
+        user_message: 用户消息
+        system_prompt: 系统提示词
+        function_context: 当前功能的上下文
+        output_container: 输出容器
+    
+    Returns:
+        生成的回复内容
+    """
+    # 添加用户消息到历史
+    add_chat_message(chat_key, "user", user_message)
+    
+    # 构建完整的Prompt
+    history_context = build_chat_context(chat_key, system_prompt)
+    
+    full_prompt = f"""{function_context}
+
+{history_context}
+
+【当前用户输入】
+{user_message}
+
+请基于以上上下文和对话历史，回答用户的问题或按要求进行修改。"""
+    
+    # 调用API生成回复
+    full_response = ""
+    was_stopped = False
+    has_error = False
+    error_message = ""
+    
+    for chunk in call_gemini_stream(full_prompt, system_prompt):
+        if st.session_state.should_stop:
+            was_stopped = True
+            break
+        
+        if chunk["type"] == "text":
+            full_response += chunk["content"]
+            output_container.markdown(full_response + "▌")
+        elif chunk["type"] == "error":
+            has_error = True
+            error_message = chunk["content"]
+            break
+        elif chunk["type"] == "retry":
+            st.info(chunk["content"])
+    
+    # 移除光标
+    if full_response:
+        output_container.markdown(full_response)
+    
+    # 处理结果
+    if has_error:
+        return None, error_message
+    elif was_stopped:
+        if full_response:
+            add_chat_message(chat_key, "assistant", full_response)
+        return full_response, "已中止"
+    else:
+        add_chat_message(chat_key, "assistant", full_response)
+        return full_response, None
+
+def add_to_history(function_type: str, input_data: dict, output_data: str, 
+                   download_data: bytes = None, download_filename: str = None,
+                   download_mime: str = None):
+    """
+    添加记录到会话历史
+    
+    Args:
+        function_type: 功能类型（生成策划案/优化策划案/汇报助手/周报助手/白皮书助手）
+        input_data: 输入数据字典
+        output_data: 输出内容
+        download_data: 可下载的文件数据（可选）
+        download_filename: 下载文件名（可选）
+        download_mime: 文件MIME类型（可选）
+    """
+    init_session_history()
+    
+    history_item = {
+        "id": len(st.session_state.session_history) + 1,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "function_type": function_type,
+        "input_data": input_data,
+        "output_data": output_data,
+        "download_data": download_data,
+        "download_filename": download_filename,
+        "download_mime": download_mime
+    }
+    
+    st.session_state.session_history.append(history_item)
+
+def get_history_summary(item: dict) -> str:
+    """
+    获取历史记录的摘要描述
+    
+    Args:
+        item: 历史记录项
+    
+    Returns:
+        摘要字符串
+    """
+    func_type = item.get("function_type", "未知")
+    input_data = item.get("input_data", {})
+    
+    # 根据不同功能类型生成不同的摘要
+    if func_type == "生成策划案":
+        desc = input_data.get("功能描述", "")[:30]
+        return f"📝 {desc}..." if len(input_data.get("功能描述", "")) > 30 else f"📝 {desc}"
+    elif func_type == "优化策划案":
+        return f"🔄 策划案优化"
+    elif func_type == "汇报助手":
+        problem = input_data.get("当前问题", "")[:20]
+        return f"📊 {problem}..." if len(input_data.get("当前问题", "")) > 20 else f"📊 {problem}"
+    elif func_type == "周报助手":
+        return f"📅 周报生成"
+    elif func_type == "白皮书助手":
+        keyword = input_data.get("功能关键词", "")
+        return f"📖 {keyword}"
+    else:
+        return f"📄 {func_type}"
+
+def clear_session_history():
+    """清空会话历史"""
+    st.session_state.session_history = []
+
+def render_history_sidebar():
+    """
+    在侧边栏渲染会话历史面板
+    """
+    init_session_history()
+    
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📜 会话历史")
+    
+    history = st.session_state.session_history
+    
+    if not history:
+        st.sidebar.caption("暂无历史记录")
+        return
+    
+    # 显示历史记录数量和清空按钮
+    col1, col2 = st.sidebar.columns([2, 1])
+    with col1:
+        st.caption(f"共 {len(history)} 条记录")
+    with col2:
+        if st.button("🗑️ 清空", key="clear_history", use_container_width=True):
+            clear_session_history()
+            st.rerun()
+    
+    # 倒序显示历史记录（最新的在前）
+    for item in reversed(history):
+        item_id = item.get("id", 0)
+        timestamp = item.get("timestamp", "")
+        func_type = item.get("function_type", "")
+        summary = get_history_summary(item)
+        
+        # 使用expander显示每条记录
+        with st.sidebar.expander(f"#{item_id} {summary}", expanded=False):
+            st.caption(f"🕐 {timestamp}")
+            st.caption(f"📌 {func_type}")
+            
+            # 查看详情按钮
+            if st.button("📄 查看详情", key=f"view_{item_id}", use_container_width=True):
+                st.session_state.viewing_history_id = item_id
+                st.session_state.show_history_detail = True
+                st.rerun()
+            
+            # 如果有下载数据，显示下载按钮
+            if item.get("download_data"):
+                st.download_button(
+                    label="📥 下载",
+                    data=item["download_data"],
+                    file_name=item.get("download_filename", "download.txt"),
+                    mime=item.get("download_mime", "text/plain"),
+                    key=f"download_{item_id}",
+                    use_container_width=True
+                )
+
 
 # AI自检的System Prompt
 SELF_CHECK_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"，正在对策划案进行复检清单检查。
@@ -918,13 +1348,22 @@ def main():
         layout="wide"
     )
     
-# 初始化session_state
+    # 初始化session_state
     if "generated_prd" not in st.session_state:
         st.session_state.generated_prd = ""
     if "optimized_prd" not in st.session_state:
         st.session_state.optimized_prd = ""
     if "is_processing" not in st.session_state:
         st.session_state.is_processing = False
+    
+    # 初始化会话历史
+    init_session_history()
+    
+    # 历史详情查看状态
+    if "viewing_history_id" not in st.session_state:
+        st.session_state.viewing_history_id = None
+    if "show_history_detail" not in st.session_state:
+        st.session_state.show_history_detail = False
     
     # 尝试从 Streamlit Secrets 获取 API Key（用于云部署）
     default_api_key = ""
@@ -1081,6 +1520,9 @@ def main():
         
         st.markdown("---")
         st.caption("Powered by Google Gemini API")
+        
+        # 渲染会话历史侧边栏
+        render_history_sidebar()
     
     # ========== 主界面 ==========
     # 标题
@@ -1110,13 +1552,63 @@ def main():
             ### 第三步：开始使用
             - **生成策划案**：输入功能描述，AI将生成完整的策划案
             - **优化策划案**：输入现有策划案，AI将通过多轮迭代优化
+            - **汇报助手**：将工作信息转化为结构化汇报文案
             """)
         st.stop()
+    
+    # ========== 历史详情查看区域 ==========
+    if st.session_state.get("show_history_detail") and st.session_state.get("viewing_history_id"):
+        history_id = st.session_state.viewing_history_id
+        # 查找对应的历史记录
+        history_item = None
+        for item in st.session_state.session_history:
+            if item.get("id") == history_id:
+                history_item = item
+                break
+        
+        if history_item:
+            st.markdown("---")
+            st.markdown(f"### 📜 历史记录详情 #{history_id}")
+            
+            # 关闭按钮
+            if st.button("❌ 关闭详情", key="close_history_detail"):
+                st.session_state.show_history_detail = False
+                st.session_state.viewing_history_id = None
+                st.rerun()
+            
+            col_info1, col_info2 = st.columns(2)
+            with col_info1:
+                st.markdown(f"**功能类型：** {history_item.get('function_type', '未知')}")
+            with col_info2:
+                st.markdown(f"**生成时间：** {history_item.get('timestamp', '未知')}")
+            
+            # 显示输入数据
+            with st.expander("📥 输入内容", expanded=False):
+                input_data = history_item.get("input_data", {})
+                for key, value in input_data.items():
+                    st.markdown(f"**{key}：**")
+                    st.text(str(value)[:500] + ("..." if len(str(value)) > 500 else ""))
+            
+            # 显示输出数据
+            with st.expander("📤 输出内容", expanded=True):
+                st.markdown(history_item.get("output_data", ""))
+            
+            # 下载按钮
+            if history_item.get("download_data"):
+                st.download_button(
+                    label=f"📥 下载 {history_item.get('download_filename', '文件')}",
+                    data=history_item["download_data"],
+                    file_name=history_item.get("download_filename", "download.txt"),
+                    mime=history_item.get("download_mime", "text/plain"),
+                    key=f"history_download_{history_id}"
+                )
+            
+            st.markdown("---")
     
     # 功能选择
     function_mode = st.selectbox(
         "🔧 功能选择",
-        options=["生成策划案", "优化策划案"],
+        options=["生成策划案", "优化策划案", "汇报助手", "周报助手", "白皮书助手"],
         help="选择要使用的功能"
     )
     
@@ -1208,6 +1700,7 @@ def main():
                 st.session_state.generated_prd = ""  # 清空之前的结果
                 st.session_state.last_error = ""  # 清空错误
                 st.session_state.current_stage = "generating"
+                st.session_state.generate_saved_to_history = False  # 重置历史保存标记
                 # 保存用户输入和附件内容到session_state
                 st.session_state.saved_user_input = user_input
                 st.session_state.saved_attachment_content = st.session_state.get("uploaded_file_content", "")
@@ -1356,8 +1849,90 @@ def main():
                 file_name="策划案.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+            
+            # 保存到会话历史（仅在首次完成时保存，避免重复）
+            if st.session_state.get("current_stage") == "done" and not st.session_state.get("generate_saved_to_history"):
+                add_to_history(
+                    function_type="生成策划案",
+                    input_data={"功能描述": st.session_state.get("saved_user_input", "")},
+                    output_data=st.session_state.generated_prd,
+                    download_data=excel_data,
+                    download_filename="策划案.xlsx",
+                    download_mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                st.session_state.generate_saved_to_history = True
+            
+            # ========== 多轮对话区域 ==========
+            st.markdown("---")
+            st.markdown("### 💬 继续对话")
+            st.caption("您可以继续追问或要求修改，AI将基于已生成的策划案进行回答。")
+            
+            # 初始化对话历史
+            chat_key = "generate_prd_chat"
+            init_chat_history(chat_key)
+            
+            # 显示对话历史
+            chat_history = get_chat_history(chat_key)
+            if chat_history:
+                for msg in chat_history:
+                    if msg["role"] == "user":
+                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
+                        st.info(msg["content"])
+                    else:
+                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
+                        st.markdown(msg["content"])
+            
+            # 对话输入
+            chat_col1, chat_col2, chat_col3 = st.columns([6, 1, 1])
+            with chat_col1:
+                chat_input = st.text_input(
+                    "追问或修改要求",
+                    placeholder="例如：请详细说明第3章的验收标准...",
+                    key="generate_chat_input",
+                    label_visibility="collapsed"
+                )
+            with chat_col2:
+                chat_send = st.button("发送", key="generate_chat_send", type="primary", use_container_width=True)
+            with chat_col3:
+                if st.button("清空", key="generate_chat_clear", use_container_width=True):
+                    clear_chat_history(chat_key)
+                    st.rerun()
+            
+            # 处理对话
+            if chat_send and chat_input.strip():
+                add_chat_message(chat_key, "user", chat_input)
+                
+                # 构建上下文
+                function_context = f"""【已生成的策划案】
+{st.session_state.generated_prd}"""
+                
+                history_context = build_chat_context(chat_key, GENERATE_PRD_SYSTEM_PROMPT)
+                full_prompt = f"""{function_context}
+
+{history_context}
+
+【当前用户输入】
+{chat_input}
+
+请基于以上策划案和对话历史，回答用户的问题或按要求进行修改。如果用户要求修改策划案，请输出修改后的完整内容。"""
+                
+                with st.spinner("正在思考..."):
+                    response_container = st.empty()
+                    full_response = ""
+                    for chunk in call_gemini_stream(full_prompt, GENERATE_PRD_SYSTEM_PROMPT):
+                        if chunk["type"] == "text":
+                            full_response += chunk["content"]
+                            response_container.markdown(full_response + "▌")
+                        elif chunk["type"] == "error":
+                            st.error(f"生成失败: {chunk['content']}")
+                            break
+                    
+                    if full_response:
+                        response_container.markdown(full_response)
+                        add_chat_message(chat_key, "assistant", full_response)
+                        st.rerun()
     
-    else:  # 优化策划案
+    elif function_mode == "优化策划案":
         st.markdown("### 🔄 优化现有策划案")
         st.markdown("请输入原策划案和修改意见，AI将通过多轮迭代进行优化。")
         
@@ -1466,6 +2041,7 @@ def main():
                 st.session_state.saved_old_prd = old_prd
                 st.session_state.saved_feedback = feedback
                 st.session_state.saved_max_iterations = max_iterations
+                st.session_state.optimize_saved_to_history = False  # 重置历史保存标记
                 # 保存附件内容
                 st.session_state.saved_optimize_attachment = st.session_state.get("uploaded_file_content", "")
                 st.session_state.saved_optimize_attachment_name = st.session_state.get("uploaded_file_name", "")
@@ -1641,6 +2217,734 @@ def main():
                 file_name="优化后的策划案.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+            
+            # 保存到会话历史（仅在首次完成时保存，避免重复）
+            if st.session_state.get("optimize_stage") == "done" and not st.session_state.get("optimize_saved_to_history"):
+                add_to_history(
+                    function_type="优化策划案",
+                    input_data={
+                        "原策划案": st.session_state.get("saved_old_prd", "")[:200] + "...",
+                        "修改意见": st.session_state.get("saved_feedback", ""),
+                        "迭代轮次": st.session_state.get("saved_max_iterations", 3)
+                    },
+                    output_data=st.session_state.optimized_prd,
+                    download_data=excel_data,
+                    download_filename="优化后的策划案.xlsx",
+                    download_mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                st.session_state.optimize_saved_to_history = True
+            
+            # ========== 多轮对话区域 ==========
+            st.markdown("---")
+            st.markdown("### 💬 继续对话")
+            st.caption("您可以继续追问或要求修改，AI将基于优化后的策划案进行回答。")
+            
+            # 初始化对话历史
+            chat_key = "optimize_prd_chat"
+            init_chat_history(chat_key)
+            
+            # 显示对话历史
+            chat_history = get_chat_history(chat_key)
+            if chat_history:
+                for msg in chat_history:
+                    if msg["role"] == "user":
+                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
+                        st.info(msg["content"])
+                    else:
+                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
+                        st.markdown(msg["content"])
+            
+            # 对话输入
+            opt_chat_col1, opt_chat_col2, opt_chat_col3 = st.columns([6, 1, 1])
+            with opt_chat_col1:
+                opt_chat_input = st.text_input(
+                    "追问或修改要求",
+                    placeholder="例如：请补充技术依赖部分的细节...",
+                    key="optimize_chat_input",
+                    label_visibility="collapsed"
+                )
+            with opt_chat_col2:
+                opt_chat_send = st.button("发送", key="optimize_chat_send", type="primary", use_container_width=True)
+            with opt_chat_col3:
+                if st.button("清空", key="optimize_chat_clear", use_container_width=True):
+                    clear_chat_history(chat_key)
+                    st.rerun()
+            
+            # 处理对话
+            if opt_chat_send and opt_chat_input.strip():
+                add_chat_message(chat_key, "user", opt_chat_input)
+                
+                # 构建上下文
+                function_context = f"""【优化后的策划案】
+{st.session_state.optimized_prd}"""
+                
+                history_context = build_chat_context(chat_key, INITIAL_FIX_SYSTEM_PROMPT)
+                full_prompt = f"""{function_context}
+
+{history_context}
+
+【当前用户输入】
+{opt_chat_input}
+
+请基于以上策划案和对话历史，回答用户的问题或按要求进行修改。如果用户要求修改策划案，请输出修改后的完整内容。"""
+                
+                with st.spinner("正在思考..."):
+                    response_container = st.empty()
+                    full_response = ""
+                    for chunk in call_gemini_stream(full_prompt, INITIAL_FIX_SYSTEM_PROMPT):
+                        if chunk["type"] == "text":
+                            full_response += chunk["content"]
+                            response_container.markdown(full_response + "▌")
+                        elif chunk["type"] == "error":
+                            st.error(f"生成失败: {chunk['content']}")
+                            break
+                    
+                    if full_response:
+                        response_container.markdown(full_response)
+                        add_chat_message(chat_key, "assistant", full_response)
+                        st.rerun()
+    
+    # ========== 汇报助手功能 ==========
+    elif function_mode == "汇报助手":
+        st.markdown("### 📊 汇报助手")
+        st.markdown("将碎片化的工作信息转化为结构化的汇报文案，用于向领导同步工作事项。")
+        
+        # 三个独立的输入框
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            current_problem = st.text_area(
+                "📌 当前问题 (Current Problem)",
+                height=150,
+                placeholder="描述当前遇到的问题或背景...\n\n例如：\n当前用户反馈游戏内好友添加流程繁琐，需要手动输入ID，且没有推荐好友功能...",
+                key="report_problem"
+            )
+            
+            expected_result = st.text_area(
+                "🎯 预期结果 (Expected Result)",
+                height=150,
+                placeholder="描述期望达成的效果...\n\n例如：\n好友添加成功率提升30%，用户好友数量平均增加2个...",
+                key="report_result"
+            )
+        
+        with col2:
+            solution = st.text_area(
+                "💡 解决方案 (Solution)",
+                height=332,
+                placeholder="描述您的解决方案或计划采取的措施...\n\n例如：\n1. 新增「可能认识的人」推荐列表\n2. 支持通过游戏内昵称搜索\n3. 添加好友后自动发送一条招呼语...",
+                key="report_solution"
+            )
+        
+        # 初始化汇报助手相关的session_state
+        if "generated_report" not in st.session_state:
+            st.session_state.generated_report = ""
+        if "report_processing" not in st.session_state:
+            st.session_state.report_processing = False
+        
+        # 生成按钮
+        if st.button("📝 生成汇报", type="primary", disabled=st.session_state.report_processing):
+            # 验证输入
+            if not current_problem.strip():
+                st.error("请填写【当前问题】！")
+            elif not solution.strip():
+                st.error("请填写【解决方案】！")
+            elif not expected_result.strip():
+                st.error("请填写【预期结果】！")
+            else:
+                st.session_state.report_processing = True
+                st.session_state.should_stop = False
+                st.session_state.generated_report = ""
+                st.session_state.report_saved_to_history = False  # 重置历史保存标记
+                st.rerun()
+        
+        # 处理生成阶段
+        if st.session_state.report_processing:
+            # 显示中止按钮和状态
+            col_status, col_stop = st.columns([4, 1])
+            with col_status:
+                st.markdown("**✍️ 正在生成汇报文案...**")
+            with col_stop:
+                if st.button("⏹️ 中止生成", key="stop_report", type="secondary"):
+                    st.session_state.should_stop = True
+                    st.warning("正在中止...")
+            
+            # 思考过程展示区域
+            thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
+            with thinking_expander:
+                thinking_container = st.empty()
+            
+            # 输出容器
+            output_container = st.empty()
+            
+            # 构建Prompt
+            user_prompt = f"""请根据以下信息，撰写一份给领导的工作汇报文案：
+
+【当前问题】
+{current_problem}
+
+【解决方案】
+{solution}
+
+【预期结果】
+{expected_result}
+
+请按照模板格式输出汇报文案。"""
+            
+            # 调用Gemini API（流式）
+            full_response = ""
+            thinking_content = ""
+            was_stopped = False
+            has_error = False
+            error_message = ""
+            
+            for chunk in call_gemini_stream(user_prompt, REPORT_ASSISTANT_SYSTEM_PROMPT, thinking_container):
+                if st.session_state.should_stop:
+                    was_stopped = True
+                    break
+                
+                if chunk["type"] == "text":
+                    full_response += chunk["content"]
+                    output_container.markdown(full_response + "▌")
+                elif chunk["type"] == "thinking":
+                    thinking_content += chunk["content"]
+                    with thinking_expander:
+                        thinking_container.markdown(thinking_content)
+                elif chunk["type"] == "error":
+                    has_error = True
+                    error_message = chunk["content"]
+                    break
+                elif chunk["type"] == "retry":
+                    st.info(chunk["content"])
+            
+            # 移除光标
+            if full_response:
+                output_container.markdown(full_response)
+            
+            # 处理结果
+            if has_error:
+                st.error(f"❌ 生成失败: {error_message}")
+            elif was_stopped:
+                st.warning("⚠️ 生成已中止")
+                if full_response:
+                    st.session_state.generated_report = full_response
+            else:
+                st.success("✅ 汇报文案生成完成！")
+                st.session_state.generated_report = full_response
+            
+            st.session_state.report_processing = False
+            st.session_state.should_stop = False
+            st.rerun()
+        
+        # 显示已生成的汇报（非处理中状态）
+        if st.session_state.generated_report and not st.session_state.report_processing:
+            st.markdown("### 📄 生成的汇报文案")
+            st.markdown(st.session_state.generated_report)
+            
+            # 复制按钮（使用下载按钮模拟）
+            st.download_button(
+                label="📋 下载汇报文案 (TXT)",
+                data=st.session_state.generated_report,
+                file_name="工作汇报.txt",
+                mime="text/plain"
+            )
+            
+            # 保存到会话历史（仅在首次完成时保存，避免重复）
+            if not st.session_state.get("report_saved_to_history"):
+                add_to_history(
+                    function_type="汇报助手",
+                    input_data={
+                        "当前问题": st.session_state.get("report_problem", ""),
+                        "解决方案": st.session_state.get("report_solution", ""),
+                        "预期结果": st.session_state.get("report_result", "")
+                    },
+                    output_data=st.session_state.generated_report,
+                    download_data=st.session_state.generated_report.encode("utf-8"),
+                    download_filename="工作汇报.txt",
+                    download_mime="text/plain"
+                )
+                st.session_state.report_saved_to_history = True
+            
+            # ========== 多轮对话区域 ==========
+            st.markdown("---")
+            st.markdown("### 💬 继续对话")
+            st.caption("您可以继续追问或要求修改，AI将基于已生成的汇报文案进行回答。")
+            
+            # 初始化对话历史
+            chat_key = "report_chat"
+            init_chat_history(chat_key)
+            
+            # 显示对话历史
+            chat_history = get_chat_history(chat_key)
+            if chat_history:
+                for msg in chat_history:
+                    if msg["role"] == "user":
+                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
+                        st.info(msg["content"])
+                    else:
+                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
+                        st.markdown(msg["content"])
+            
+            # 对话输入
+            report_chat_col1, report_chat_col2, report_chat_col3 = st.columns([6, 1, 1])
+            with report_chat_col1:
+                report_chat_input = st.text_input(
+                    "追问或修改要求",
+                    placeholder="例如：请把解决方案写得更详细一些...",
+                    key="report_chat_input",
+                    label_visibility="collapsed"
+                )
+            with report_chat_col2:
+                report_chat_send = st.button("发送", key="report_chat_send", type="primary", use_container_width=True)
+            with report_chat_col3:
+                if st.button("清空", key="report_chat_clear", use_container_width=True):
+                    clear_chat_history(chat_key)
+                    st.rerun()
+            
+            # 处理对话
+            if report_chat_send and report_chat_input.strip():
+                add_chat_message(chat_key, "user", report_chat_input)
+                
+                # 构建上下文
+                function_context = f"""【已生成的汇报文案】
+{st.session_state.generated_report}"""
+                
+                history_context = build_chat_context(chat_key, REPORT_ASSISTANT_SYSTEM_PROMPT)
+                full_prompt = f"""{function_context}
+
+{history_context}
+
+【当前用户输入】
+{report_chat_input}
+
+请基于以上汇报文案和对话历史，回答用户的问题或按要求进行修改。如果用户要求修改，请输出修改后的完整内容。"""
+                
+                with st.spinner("正在思考..."):
+                    response_container = st.empty()
+                    full_response = ""
+                    for chunk in call_gemini_stream(full_prompt, REPORT_ASSISTANT_SYSTEM_PROMPT):
+                        if chunk["type"] == "text":
+                            full_response += chunk["content"]
+                            response_container.markdown(full_response + "▌")
+                        elif chunk["type"] == "error":
+                            st.error(f"生成失败: {chunk['content']}")
+                            break
+                    
+                    if full_response:
+                        response_container.markdown(full_response)
+                        add_chat_message(chat_key, "assistant", full_response)
+                        st.rerun()
+    
+    # ========== 周报助手功能 ==========
+    elif function_mode == "周报助手":
+        st.markdown("### 📅 周报助手")
+        st.markdown("将零散的日报/工作记录汇总、提炼为逻辑清晰、重点突出的专业周报。")
+        
+        # 大的多行文本框
+        daily_logs = st.text_area(
+            "请输入本周日报/工作记录",
+            height=400,
+            placeholder="""请输入本周的工作记录，可以是日报汇总或工作流水...
+
+示例格式：
+【周一】
+- 完成推荐算法的数据分析，发现头部固化问题
+- 与产品对齐特辑分类来源逻辑
+
+【周二】
+- 调整混排策略，增加"热门趋势"多样性
+- 修复作品更新后未重新审核的问题
+
+【周三】
+- 新增平均对局时长准入筛选条件
+- 提高人审举报阈值从1调整到5
+...""",
+            key="weekly_daily_logs"
+        )
+        
+        # 初始化周报助手相关的session_state
+        if "generated_weekly_report" not in st.session_state:
+            st.session_state.generated_weekly_report = ""
+        if "weekly_report_processing" not in st.session_state:
+            st.session_state.weekly_report_processing = False
+        
+        # 生成按钮
+        if st.button("📝 生成周报", type="primary", disabled=st.session_state.weekly_report_processing):
+            if not daily_logs.strip():
+                st.error("请输入本周日报/工作记录！")
+            else:
+                st.session_state.weekly_report_processing = True
+                st.session_state.should_stop = False
+                st.session_state.generated_weekly_report = ""
+                st.session_state.saved_daily_logs = daily_logs
+                st.session_state.weekly_saved_to_history = False  # 重置历史保存标记
+                st.rerun()
+        
+        # 处理生成阶段
+        if st.session_state.weekly_report_processing:
+            # 显示中止按钮和状态
+            col_status, col_stop = st.columns([4, 1])
+            with col_status:
+                st.markdown("**✍️ 正在生成周报...**")
+            with col_stop:
+                if st.button("⏹️ 中止生成", key="stop_weekly", type="secondary"):
+                    st.session_state.should_stop = True
+                    st.warning("正在中止...")
+            
+            # 思考过程展示区域
+            thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
+            with thinking_expander:
+                thinking_container = st.empty()
+            
+            # 输出容器
+            output_container = st.empty()
+            
+            # 构建Prompt
+            saved_logs = st.session_state.get("saved_daily_logs", daily_logs)
+            user_prompt = f"""
+{WEEKLY_REPORT_SYSTEM_PROMPT}
+
+Input Data (本周日报/工作记录):
+{saved_logs}
+"""
+            
+            # 调用Gemini API（流式）
+            full_response = ""
+            thinking_content = ""
+            was_stopped = False
+            has_error = False
+            error_message = ""
+            
+            for chunk in call_gemini_stream(user_prompt, ""):
+                if st.session_state.should_stop:
+                    was_stopped = True
+                    break
+                
+                if chunk["type"] == "text":
+                    full_response += chunk["content"]
+                    output_container.markdown(full_response + "▌")
+                elif chunk["type"] == "thinking":
+                    thinking_content += chunk["content"]
+                    with thinking_expander:
+                        thinking_container.markdown(thinking_content)
+                elif chunk["type"] == "error":
+                    has_error = True
+                    error_message = chunk["content"]
+                    break
+                elif chunk["type"] == "retry":
+                    st.info(chunk["content"])
+            
+            # 移除光标
+            if full_response:
+                output_container.markdown(full_response)
+            
+            # 处理结果
+            if has_error:
+                st.error(f"❌ 生成失败: {error_message}")
+            elif was_stopped:
+                st.warning("⚠️ 生成已中止")
+                if full_response:
+                    st.session_state.generated_weekly_report = full_response
+            else:
+                st.success("✅ 周报生成完成！")
+                st.session_state.generated_weekly_report = full_response
+            
+            st.session_state.weekly_report_processing = False
+            st.session_state.should_stop = False
+            st.rerun()
+        
+        # 显示已生成的周报（非处理中状态）
+        if st.session_state.generated_weekly_report and not st.session_state.weekly_report_processing:
+            st.markdown("### 📄 生成的周报")
+            st.markdown(st.session_state.generated_weekly_report)
+            
+            # 下载按钮
+            st.download_button(
+                label="📋 下载周报 (TXT)",
+                data=st.session_state.generated_weekly_report,
+                file_name="本周周报.txt",
+                mime="text/plain"
+            )
+            
+            # 保存到会话历史（仅在首次完成时保存，避免重复）
+            if not st.session_state.get("weekly_saved_to_history"):
+                add_to_history(
+                    function_type="周报助手",
+                    input_data={"工作记录": st.session_state.get("saved_daily_logs", "")[:200] + "..."},
+                    output_data=st.session_state.generated_weekly_report,
+                    download_data=st.session_state.generated_weekly_report.encode("utf-8"),
+                    download_filename="本周周报.txt",
+                    download_mime="text/plain"
+                )
+                st.session_state.weekly_saved_to_history = True
+            
+            # ========== 多轮对话区域 ==========
+            st.markdown("---")
+            st.markdown("### 💬 继续对话")
+            st.caption("您可以继续追问或要求修改，AI将基于已生成的周报进行回答。")
+            
+            # 初始化对话历史
+            chat_key = "weekly_chat"
+            init_chat_history(chat_key)
+            
+            # 显示对话历史
+            chat_history = get_chat_history(chat_key)
+            if chat_history:
+                for msg in chat_history:
+                    if msg["role"] == "user":
+                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
+                        st.info(msg["content"])
+                    else:
+                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
+                        st.markdown(msg["content"])
+            
+            # 对话输入
+            weekly_chat_col1, weekly_chat_col2, weekly_chat_col3 = st.columns([6, 1, 1])
+            with weekly_chat_col1:
+                weekly_chat_input = st.text_input(
+                    "追问或修改要求",
+                    placeholder="例如：请补充数据分析部分的内容...",
+                    key="weekly_chat_input",
+                    label_visibility="collapsed"
+                )
+            with weekly_chat_col2:
+                weekly_chat_send = st.button("发送", key="weekly_chat_send", type="primary", use_container_width=True)
+            with weekly_chat_col3:
+                if st.button("清空", key="weekly_chat_clear", use_container_width=True):
+                    clear_chat_history(chat_key)
+                    st.rerun()
+            
+            # 处理对话
+            if weekly_chat_send and weekly_chat_input.strip():
+                add_chat_message(chat_key, "user", weekly_chat_input)
+                
+                # 构建上下文
+                function_context = f"""【已生成的周报】
+{st.session_state.generated_weekly_report}"""
+                
+                history_context = build_chat_context(chat_key, WEEKLY_REPORT_SYSTEM_PROMPT)
+                full_prompt = f"""{function_context}
+
+{history_context}
+
+【当前用户输入】
+{weekly_chat_input}
+
+请基于以上周报和对话历史，回答用户的问题或按要求进行修改。如果用户要求修改，请输出修改后的完整内容。"""
+                
+                with st.spinner("正在思考..."):
+                    response_container = st.empty()
+                    full_response = ""
+                    for chunk in call_gemini_stream(full_prompt, WEEKLY_REPORT_SYSTEM_PROMPT):
+                        if chunk["type"] == "text":
+                            full_response += chunk["content"]
+                            response_container.markdown(full_response + "▌")
+                        elif chunk["type"] == "error":
+                            st.error(f"生成失败: {chunk['content']}")
+                            break
+                    
+                    if full_response:
+                        response_container.markdown(full_response)
+                        add_chat_message(chat_key, "assistant", full_response)
+                        st.rerun()
+    
+    # ========== 白皮书助手功能 ==========
+    elif function_mode == "白皮书助手":
+        st.markdown("### 📖 白皮书助手")
+        st.markdown("将简短的功能关键词扩写为标准的PUBGM WoW模式版本功能陈述。")
+        
+        # 单行文本框
+        feature_keyword = st.text_input(
+            "请输入功能关键词",
+            placeholder="例如：动画生成、自定义UI、武装AI、全局变量...",
+            key="whitepaper_keyword"
+        )
+        
+        # 初始化白皮书助手相关的session_state
+        if "generated_feature_desc" not in st.session_state:
+            st.session_state.generated_feature_desc = ""
+        if "whitepaper_processing" not in st.session_state:
+            st.session_state.whitepaper_processing = False
+        
+        # 生成按钮
+        if st.button("📝 生成功能描述", type="primary", disabled=st.session_state.whitepaper_processing):
+            if not feature_keyword.strip():
+                st.error("请输入功能关键词！")
+            else:
+                st.session_state.whitepaper_processing = True
+                st.session_state.should_stop = False
+                st.session_state.generated_feature_desc = ""
+                st.session_state.saved_feature_keyword = feature_keyword
+                st.session_state.whitepaper_saved_to_history = False  # 重置历史保存标记
+                st.rerun()
+        
+        # 处理生成阶段
+        if st.session_state.whitepaper_processing:
+            # 显示中止按钮和状态
+            col_status, col_stop = st.columns([4, 1])
+            with col_status:
+                st.markdown("**✍️ 正在生成功能描述...**")
+            with col_stop:
+                if st.button("⏹️ 中止生成", key="stop_whitepaper", type="secondary"):
+                    st.session_state.should_stop = True
+                    st.warning("正在中止...")
+            
+            # 思考过程展示区域
+            thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
+            with thinking_expander:
+                thinking_container = st.empty()
+            
+            # 输出容器
+            output_container = st.empty()
+            
+            # 构建Prompt
+            saved_keyword = st.session_state.get("saved_feature_keyword", feature_keyword)
+            user_prompt = f"""
+{WHITEPAPER_ASSISTANT_SYSTEM_PROMPT}
+
+---
+请输入功能关键词：
+【{saved_keyword}】
+"""
+            
+            # 调用Gemini API（流式）
+            full_response = ""
+            thinking_content = ""
+            was_stopped = False
+            has_error = False
+            error_message = ""
+            
+            for chunk in call_gemini_stream(user_prompt, ""):
+                if st.session_state.should_stop:
+                    was_stopped = True
+                    break
+                
+                if chunk["type"] == "text":
+                    full_response += chunk["content"]
+                    output_container.markdown(full_response + "▌")
+                elif chunk["type"] == "thinking":
+                    thinking_content += chunk["content"]
+                    with thinking_expander:
+                        thinking_container.markdown(thinking_content)
+                elif chunk["type"] == "error":
+                    has_error = True
+                    error_message = chunk["content"]
+                    break
+                elif chunk["type"] == "retry":
+                    st.info(chunk["content"])
+            
+            # 移除光标
+            if full_response:
+                output_container.markdown(full_response)
+            
+            # 处理结果
+            if has_error:
+                st.error(f"❌ 生成失败: {error_message}")
+            elif was_stopped:
+                st.warning("⚠️ 生成已中止")
+                if full_response:
+                    st.session_state.generated_feature_desc = full_response
+            else:
+                st.success("✅ 功能描述生成完成！")
+                st.session_state.generated_feature_desc = full_response
+            
+            st.session_state.whitepaper_processing = False
+            st.session_state.should_stop = False
+            st.rerun()
+        
+        # 显示已生成的功能描述（非处理中状态）
+        if st.session_state.generated_feature_desc and not st.session_state.whitepaper_processing:
+            st.markdown("### 📄 生成的功能描述")
+            st.markdown(st.session_state.generated_feature_desc)
+            
+            # 下载按钮
+            st.download_button(
+                label="📋 下载功能描述 (TXT)",
+                data=st.session_state.generated_feature_desc,
+                file_name="功能描述.txt",
+                mime="text/plain"
+            )
+            
+            # 保存到会话历史（仅在首次完成时保存，避免重复）
+            if not st.session_state.get("whitepaper_saved_to_history"):
+                add_to_history(
+                    function_type="白皮书助手",
+                    input_data={"功能关键词": st.session_state.get("saved_feature_keyword", "")},
+                    output_data=st.session_state.generated_feature_desc,
+                    download_data=st.session_state.generated_feature_desc.encode("utf-8"),
+                    download_filename="功能描述.txt",
+                    download_mime="text/plain"
+                )
+                st.session_state.whitepaper_saved_to_history = True
+            
+            # ========== 多轮对话区域 ==========
+            st.markdown("---")
+            st.markdown("### 💬 继续对话")
+            st.caption("您可以继续追问或要求修改，AI将基于已生成的功能描述进行回答。")
+            
+            # 初始化对话历史
+            chat_key = "whitepaper_chat"
+            init_chat_history(chat_key)
+            
+            # 显示对话历史
+            chat_history = get_chat_history(chat_key)
+            if chat_history:
+                for msg in chat_history:
+                    if msg["role"] == "user":
+                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
+                        st.info(msg["content"])
+                    else:
+                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
+                        st.markdown(msg["content"])
+            
+            # 对话输入
+            wp_chat_col1, wp_chat_col2, wp_chat_col3 = st.columns([6, 1, 1])
+            with wp_chat_col1:
+                wp_chat_input = st.text_input(
+                    "追问或修改要求",
+                    placeholder="例如：请再生成一个关于武装AI的功能描述...",
+                    key="whitepaper_chat_input",
+                    label_visibility="collapsed"
+                )
+            with wp_chat_col2:
+                wp_chat_send = st.button("发送", key="whitepaper_chat_send", type="primary", use_container_width=True)
+            with wp_chat_col3:
+                if st.button("清空", key="whitepaper_chat_clear", use_container_width=True):
+                    clear_chat_history(chat_key)
+                    st.rerun()
+            
+            # 处理对话
+            if wp_chat_send and wp_chat_input.strip():
+                add_chat_message(chat_key, "user", wp_chat_input)
+                
+                # 构建上下文
+                function_context = f"""【已生成的功能描述】
+{st.session_state.generated_feature_desc}"""
+                
+                history_context = build_chat_context(chat_key, WHITEPAPER_ASSISTANT_SYSTEM_PROMPT)
+                full_prompt = f"""{function_context}
+
+{history_context}
+
+【当前用户输入】
+{wp_chat_input}
+
+请基于以上内容和对话历史，回答用户的问题或按要求进行修改。如果用户要求生成新的功能描述，请按照标准句式输出。"""
+                
+                with st.spinner("正在思考..."):
+                    response_container = st.empty()
+                    full_response = ""
+                    for chunk in call_gemini_stream(full_prompt, WHITEPAPER_ASSISTANT_SYSTEM_PROMPT):
+                        if chunk["type"] == "text":
+                            full_response += chunk["content"]
+                            response_container.markdown(full_response + "▌")
+                        elif chunk["type"] == "error":
+                            st.error(f"生成失败: {chunk['content']}")
+                            break
+                    
+                    if full_response:
+                        response_container.markdown(full_response)
+                        add_chat_message(chat_key, "assistant", full_response)
+                        st.rerun()
     
     # 页脚
     st.markdown("---")
