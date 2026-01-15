@@ -2389,7 +2389,7 @@ def main():
     # 功能选择
     function_mode = st.selectbox(
         "🔧 功能选择",
-options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报助手", "周报助手", "白皮书助手", "游戏策划(lina)"],
+options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报助手", "周报助手", "白皮书助手", "游戏策划(lina)", "表格处理助手"],
         help="选择要使用的功能"
     )
     
@@ -4478,6 +4478,181 @@ Input Data (本周日报/工作记录):
             # 清空输入框（通过增加计数器改变key，强制重建组件）
             st.session_state.lina_input_key_counter += 1
             st.rerun()
+    
+    # ========== 表格处理助手模块 ==========
+    elif function_mode == "表格处理助手":
+        st.markdown("### 📊 表格处理助手")
+        st.markdown("上传Excel表格，描述处理逻辑，AI将自动生成代码并执行处理。")
+        
+        # 表格处理助手的System Prompt
+        TABLE_ASSISTANT_SYSTEM_PROMPT = """Role: 你是一位精通 Python Pandas 库的数据处理专家。
+
+Task: 你的任务是根据用户提供的【数据列名结构】、【处理逻辑】和【输出要求】，编写一段可执行的 Python 代码来处理数据。
+
+Context (运行环境):
+1. 这是一个沙盒环境，已经预置了一个名为 `df` 的 Pandas DataFrame 变量，它包含了用户上传的数据。
+2. 你只需要编写处理 `df` 的逻辑代码。
+3. **关键约束**：处理完成后的最终结果 DataFrame 必须赋值给变量名 `result_df`。
+
+Input Data:
+- 数据列名: {columns}
+- 处理逻辑: {processing_logic}
+- 输出要求: {output_requirements}
+
+Output Rules (Strict):
+1. **只输出 Python 代码**。不要包含 ```python ... ``` 标记，不要包含任何解释性文字，不要包含 print 语句。
+2. 确保代码可以直接在 `exec()` 函数中运行。
+3. 必须确保最终结果存储在 `result_df` 变量中。
+4. 如果需要导入 pandas，请使用 `import pandas as pd`（虽然环境通常已预置，但为了保险）。
+5. 不要读取文件（文件已在 `df` 中），不要保存文件（系统会处理保存）。
+
+Example Output:
+# 假设用户要求筛选A列大于10
+result_df = df[df['A'] > 10].copy()"""
+        
+        # 初始化Session State
+        if "table_raw_df" not in st.session_state:
+            st.session_state.table_raw_df = None
+        if "table_result_df" not in st.session_state:
+            st.session_state.table_result_df = None
+        if "table_is_processing" not in st.session_state:
+            st.session_state.table_is_processing = False
+        
+        # 文件上传区
+        st.markdown("#### 📁 文件上传")
+        uploaded_file = st.file_uploader(
+            "上传Excel表格",
+            type=['xlsx', 'xls'],
+            key="table_file_uploader",
+            help="支持 .xlsx 和 .xls 格式的Excel文件"
+        )
+        
+        # 读取上传的文件
+        if uploaded_file is not None:
+            try:
+                import pandas as pd
+                st.session_state.table_raw_df = pd.read_excel(uploaded_file)
+                st.success(f"✅ 文件上传成功！共 {len(st.session_state.table_raw_df)} 行，{len(st.session_state.table_raw_df.columns)} 列")
+                
+                # 显示列名信息
+                with st.expander("📋 查看数据列名", expanded=True):
+                    st.write("**列名列表：**", ", ".join(st.session_state.table_raw_df.columns.tolist()))
+                
+                # 显示数据预览
+                with st.expander("👁️ 数据预览（前5行）"):
+                    st.dataframe(st.session_state.table_raw_df.head(5))
+            except Exception as e:
+                st.error(f"❌ 文件读取失败: {e}")
+                st.session_state.table_raw_df = None
+        
+        # 需求输入区
+        st.markdown("#### ✏️ 处理需求")
+        
+        processing_logic = st.text_area(
+            "请输入数据处理逻辑",
+            placeholder="例如：将A列和B列相加生成C列；筛选出D列大于100的数据；按E列分组统计F列的平均值...",
+            height=120,
+            key="table_processing_logic"
+        )
+        
+        output_requirements = st.text_input(
+            "请输入输出内容要求",
+            placeholder="例如：保留所有列；只保留C列和D列；输出前100行数据...",
+            key="table_output_requirements"
+        )
+        
+        # 执行按钮
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            process_btn = st.button(
+                "🚀 开始处理并生成结果",
+                disabled=st.session_state.table_is_processing or st.session_state.table_raw_df is None,
+                type="primary"
+            )
+        
+        # 处理逻辑
+        if process_btn and st.session_state.table_raw_df is not None:
+            if not processing_logic.strip():
+                st.warning("⚠️ 请输入数据处理逻辑")
+            else:
+                st.session_state.table_is_processing = True
+                
+                import pandas as pd
+                
+                # 获取列名
+                columns_str = ", ".join(st.session_state.table_raw_df.columns.tolist())
+                
+                # 构建Prompt
+                final_prompt = TABLE_ASSISTANT_SYSTEM_PROMPT.format(
+                    columns=columns_str,
+                    processing_logic=processing_logic,
+                    output_requirements=output_requirements if output_requirements.strip() else "保留所有相关列"
+                )
+                
+                with st.spinner("🤖 AI正在分析需求并生成代码..."):
+                    try:
+                        # 调用模型生成代码
+                        generated_code = call_gemini(final_prompt)
+                        
+                        if generated_code:
+                            # 清洗代码（防止模型带了markdown标记）
+                            code_to_run = generated_code.replace("```python", "").replace("```", "").strip()
+                            
+                            # 显示生成的代码（调试用，可选）
+                            with st.expander("🔍 查看生成的代码", expanded=False):
+                                st.code(code_to_run, language="python")
+                            
+                            # 准备执行环境
+                            local_vars = {'df': st.session_state.table_raw_df.copy(), 'pd': pd}
+                            
+                            # 执行代码
+                            with st.spinner("⚙️ 正在执行数据处理..."):
+                                exec(code_to_run, {}, local_vars)
+                            
+                            # 提取结果
+                            if 'result_df' in local_vars:
+                                st.session_state.table_result_df = local_vars['result_df']
+                                st.success("✅ 处理完成！")
+                            else:
+                                st.error("❌ 模型生成的代码未定义 'result_df' 变量，请重试。")
+                        else:
+                            st.error("❌ AI未能生成有效代码，请重试。")
+                    
+                    except Exception as e:
+                        st.error(f"❌ 代码执行出错: {e}")
+                        st.session_state.table_result_df = None
+                
+                st.session_state.table_is_processing = False
+        
+        # 结果展示区
+        if st.session_state.table_result_df is not None:
+            st.markdown("---")
+            st.markdown("#### 📊 处理结果")
+            
+            result_df = st.session_state.table_result_df
+            st.info(f"结果数据：共 {len(result_df)} 行，{len(result_df.columns)} 列")
+            
+            # Markdown预览
+            st.markdown("**结果预览（前10行）：**")
+            try:
+                st.markdown(result_df.head(10).to_markdown(index=False))
+            except:
+                # 如果to_markdown不可用，使用dataframe显示
+                st.dataframe(result_df.head(10))
+            
+            # Excel下载
+            import pandas as pd
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                result_df.to_excel(writer, index=False)
+            processed_data = output.getvalue()
+            
+            st.download_button(
+                label="📥 下载处理后的Excel",
+                data=processed_data,
+                file_name="processed_result.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
     
     # 页脚
     st.markdown("---")
