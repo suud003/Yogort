@@ -11,6 +11,8 @@ import io
 import re
 import time
 import base64
+import json
+import os
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -82,7 +84,79 @@ GENERATE_PRD_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
 9、技术依赖（需要的技术资源和接口）
 10、版本规划（分阶段实施计划）
 
-请根据用户提供的功能描述，生成完整、专业的策划案。"""
+【时间信息】
+当前日期：{current_date}
+
+请根据用户提供的功能描述，生成完整、专业的策划案。创建日期请使用上述当前日期。"""
+
+# 思维脑图解析的System Prompt
+MINDMAP_PARSE_SYSTEM_PROMPT = """你是一个专业的思维脑图解析专家。
+
+【任务】
+请仔细分析用户上传的思维脑图图片，识别出其中的所有节点和层级关系，并将其转换为结构化的文本格式。
+
+【输出格式要求】
+- 使用数字层级格式表示节点关系（如 1、1.1、1.1.1）
+- 根节点/中心主题作为一级标题
+- 分支节点依次作为二级、三级标题
+- 叶子节点作为最底层内容
+- 保留原始脑图中的所有文字信息
+- 如果有连接线或箭头表示的关系，请在相应节点后说明
+
+【输出示例】
+功能名称：好友系统
+
+1、核心功能
+1.1、添加好友
+1.1.1、搜索添加
+1.1.2、扫码添加
+1.1.3、推荐添加
+1.2、好友管理
+1.2.1、删除好友
+1.2.2、设置备注
+1.2.3、屏蔽好友
+
+2、社交互动
+2.1、私聊功能
+2.2、组队邀请
+2.3、礼物赠送
+
+请严格按照图片内容进行解析，不要添加图片中没有的内容。"""
+
+# 基于脑图结构生成策划案的System Prompt
+MINDMAP_TO_PRD_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
+
+【任务】
+根据用户提供的思维脑图结构（已解析为文本格式），生成完整的策划案文档。
+
+【语言约束】
+- 严禁在正文中使用英文（代码变量除外）
+- 不需要AI生成的功能用英文解释（例如不要写 "Feature Overview"，必须写 "功能概述"）
+- 所有标题、内容必须使用中文
+
+【格式约束】
+- 标题层级严格使用简单的数字格式（如 1、2、3... 或 1.1、1.2...）
+- 不要使用 Markdown 的 # 符号或英文字母作为标题索引
+- 保持文档结构清晰整洁
+
+【内容结构】
+你必须按照以下10个章节来撰写策划案，同时要充分利用脑图中的结构信息：
+
+1、功能概述（一句话说清做什么，基于脑图的中心主题）
+2、战略定位（解决什么问题，为谁解决）
+3、用户场景（具体使用流程和触发点）
+4、功能规格（详细的功能点和交互，参考脑图的分支结构）
+5、AI处理逻辑（模型调用、数据处理流程，如适用）
+6、容错设计（出错时的体验保障）
+7、验收标准（如何判断功能成功）
+8、能力边界（明确什么不能做）
+9、技术依赖（需要的技术资源和接口）
+10、版本规划（分阶段实施计划，可参考脑图的优先级分组）
+
+【时间信息】
+当前日期：{current_date}
+
+请根据思维脑图的结构，生成完整、专业的策划案。确保策划案内容与脑图结构保持一致，同时补充脑图中未涉及但策划案必须包含的内容。创建日期请使用上述当前日期。"""
 
 # 初始修正的System Prompt
 INITIAL_FIX_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
@@ -155,6 +229,19 @@ CHECKLIST = """
 □ 9. 是否声明能力边界？
 □ 10. 是否列出技术依赖？
 """
+
+def get_system_prompt_with_date(prompt_template: str) -> str:
+    """
+    将系统提示词中的日期占位符替换为当前日期
+    
+    Args:
+        prompt_template: 包含 {current_date} 占位符的系统提示词模板
+    
+    Returns:
+        str: 替换后的系统提示词
+    """
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    return prompt_template.replace("{current_date}", current_date)
 
 # 汇报助手的System Prompt
 REPORT_ASSISTANT_SYSTEM_PROMPT = """# Role: 资深职场沟通专家
@@ -256,10 +343,92 @@ WHITEPAPER_ASSISTANT_SYSTEM_PROMPT = """# Role: PUBGM WoW模式 版本文档撰�
 # 会话历史管理
 # ============================================
 
+# 历史记录存储目录
+HISTORY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_histories")
+
+def get_user_id() -> str:
+    """
+    获取或生成用户唯一ID
+    
+    Returns:
+        用户唯一ID字符串
+    """
+    import uuid
+    if "user_id" not in st.session_state:
+        # 生成一个新的用户ID
+        st.session_state.user_id = str(uuid.uuid4())[:8]
+    return st.session_state.user_id
+
+def get_user_history_path() -> str:
+    """
+    获取当前用户的历史记录文件路径
+    
+    Returns:
+        用户历史记录文件的完整路径
+    """
+    user_id = get_user_id()
+    # 确保目录存在
+    if not os.path.exists(HISTORY_DIR):
+        os.makedirs(HISTORY_DIR)
+    return os.path.join(HISTORY_DIR, f"history_{user_id}.json")
+
+def load_history_from_file() -> list:
+    """
+    从本地文件加载会话历史
+    
+    Returns:
+        历史记录列表
+    """
+    try:
+        history_path = get_user_history_path()
+        if os.path.exists(history_path):
+            with open(history_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"加载历史记录失败: {e}")
+    return []
+
+def save_history_to_file(history: list):
+    """
+    保存会话历史到本地文件
+    
+    Args:
+        history: 历史记录列表
+    """
+    try:
+        history_path = get_user_history_path()
+        with open(history_path, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except IOError as e:
+        print(f"保存历史记录失败: {e}")
+
+def get_download_data(item: dict) -> bytes:
+    """
+    获取历史记录中的下载数据，处理base64解码
+    
+    Args:
+        item: 历史记录项
+    
+    Returns:
+        解码后的二进制数据，如果没有则返回None
+    """
+    download_data = item.get("download_data")
+    if download_data:
+        # 如果是字符串（base64编码），则解码
+        if isinstance(download_data, str):
+            try:
+                return base64.b64decode(download_data)
+            except Exception:
+                return download_data.encode('utf-8')
+        # 如果已经是bytes，直接返回
+        return download_data
+    return None
+
 def init_session_history():
-    """初始化会话历史存储"""
+    """初始化会话历史存储，从本地文件加载"""
     if "session_history" not in st.session_state:
-        st.session_state.session_history = []
+        # 从本地文件加载历史记录
+        st.session_state.session_history = load_history_from_file()
 
 
 # ============================================
@@ -389,8 +558,14 @@ def render_chat_interface(chat_key: str, system_prompt: str, container,
             "继续对话",
             placeholder=placeholder,
             key=chat_input_key,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            on_change=lambda: st.session_state.update({f"{chat_key}_enter_pressed": True})
         )
+    
+    # 检测是否按下 Enter 键（text_input 值变化时触发）
+    enter_pressed = st.session_state.get(f"{chat_key}_enter_pressed", False)
+    if enter_pressed:
+        st.session_state[f"{chat_key}_enter_pressed"] = False
     
     with col_btn:
         send_clicked = st.button("发送", key=f"{chat_key}_send", type="primary", use_container_width=True)
@@ -400,7 +575,10 @@ def render_chat_interface(chat_key: str, system_prompt: str, container,
             clear_chat_history(chat_key)
             st.rerun()
     
-    return send_clicked, user_message, chat_processing_key
+    # Enter 键或点击发送按钮都可以触发
+    should_send = (send_clicked or enter_pressed) and user_message.strip()
+    
+    return should_send, user_message, chat_processing_key
 
 def process_chat_message(chat_key: str, user_message: str, system_prompt: str, 
                          function_context: str, output_container):
@@ -490,12 +668,16 @@ def add_to_history(function_type: str, input_data: dict, output_data: str,
         "function_type": function_type,
         "input_data": input_data,
         "output_data": output_data,
-        "download_data": download_data,
+        # 将二进制数据转为base64字符串以便存储到JSON
+        "download_data": base64.b64encode(download_data).decode('utf-8') if download_data else None,
         "download_filename": download_filename,
         "download_mime": download_mime
     }
     
     st.session_state.session_history.append(history_item)
+    
+    # 保存到本地文件
+    save_history_to_file(st.session_state.session_history)
 
 def get_history_summary(item: dict) -> str:
     """
@@ -530,6 +712,8 @@ def get_history_summary(item: dict) -> str:
 def clear_session_history():
     """清空会话历史"""
     st.session_state.session_history = []
+    # 同时清空本地文件
+    save_history_to_file([])
 
 def render_history_sidebar():
     """
@@ -539,6 +723,37 @@ def render_history_sidebar():
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📜 会话历史")
+    
+    # 显示用户ID和历史文件信息
+    user_id = get_user_id()
+    history_path = get_user_history_path()
+    
+    # 用户信息显示区
+    st.sidebar.caption(f"🆔 您的用户ID: `{user_id}`")
+    
+    # 下载按钮放在最显眼位置
+    if os.path.exists(history_path):
+        try:
+            with open(history_path, 'r', encoding='utf-8') as f:
+                history_content = f.read()
+            st.sidebar.download_button(
+                label="💾 下载我的历史记录",
+                data=history_content,
+                file_name=f"history_{user_id}.json",
+                mime="application/json",
+                key="download_history_file",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.sidebar.error(f"读取文件失败: {e}")
+    else:
+        st.sidebar.caption("📝 暂无历史记录可下载")
+    
+    # 存储信息折叠面板
+    with st.sidebar.expander("📁 存储信息详情", expanded=False):
+        st.caption(f"📂 **存储文件**: `history_{user_id}.json`")
+        st.caption(f"📍 **存储目录**: `{HISTORY_DIR}`")
+        st.info("💡 刷新页面会生成新的用户ID，建议及时下载备份历史记录")
     
     history = st.session_state.session_history
     
@@ -577,7 +792,7 @@ def render_history_sidebar():
             if item.get("download_data"):
                 st.download_button(
                     label="📥 下载",
-                    data=item["download_data"],
+                    data=get_download_data(item),
                     file_name=item.get("download_filename", "download.txt"),
                     mime=item.get("download_mime", "text/plain"),
                     key=f"download_{item_id}",
@@ -841,6 +1056,163 @@ def extract_text_from_file(uploaded_file) -> str:
         return "[不支持的文件类型]"
 
 
+def format_prd_content(content: str) -> str:
+    """
+    格式化策划案内容，增强Markdown显示效果
+    将数字标题转换为更美观的格式
+    
+    Args:
+        content: 原始策划案内容
+    
+    Returns:
+        str: 格式化后的Markdown内容
+    """
+    import re
+    
+    # 处理内容，增强格式
+    lines = content.split('\n')
+    formatted_lines = []
+    
+    # 用于判断是否在列表上下文中
+    in_list_context = False
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # 跳过空行
+        if not stripped:
+            formatted_lines.append(line)
+            in_list_context = False
+            continue
+        
+        # 清理标题中的 ** 符号
+        clean_line = re.sub(r'\*\*', '', stripped)
+        
+        # 匹配三级标题：1.1.1、xxx 或 1.1.1 xxx（优先匹配更长的模式）
+        level3_match = re.match(r'^(\d+\.\d+\.\d+)[、\.．]?\s*(.+)$', clean_line)
+        # 匹配二级标题：1.1、xxx 或 1.1 xxx
+        level2_match = re.match(r'^(\d+\.\d+)[、\.．]?\s*(.+)$', clean_line)
+        # 匹配一级标题：仅行首为单个数字 + 顿号/点号 + 标题文字（不含冒号结尾，避免匹配列表）
+        level1_match = re.match(r'^(\d+)[、\.．]\s*([^：:]+)$', clean_line)
+        
+        # 检查是否是列表项（在特定上下文中的数字开头行）
+        # 列表项特征：前面有 - 或 * 开头，或者在流程/步骤描述中
+        is_list_item = False
+        
+        # 检查前一行是否暗示这是列表
+        if i > 0:
+            prev_line = lines[i-1].strip() if i > 0 else ""
+            # 如果前一行以冒号结尾，或包含"流程"、"步骤"等词，后续的数字行可能是列表
+            if prev_line.endswith('：') or prev_line.endswith(':') or \
+               '流程' in prev_line or '步骤' in prev_line or in_list_context:
+                # 检查当前行是否看起来像列表项（较长的描述性文字）
+                if level1_match and len(clean_line) > 20:
+                    is_list_item = True
+                    in_list_context = True
+        
+        # 检查是否是以 - 或 * 开头的列表项
+        if stripped.startswith('-') or stripped.startswith('*'):
+            # 保持原样，只清理多余的 **
+            formatted_lines.append(re.sub(r'\*\*([^*]+)\*\*', r'**\1**', line))
+            in_list_context = True
+            continue
+        
+        if level3_match:
+            num, title = level3_match.groups()
+            title = title.strip()
+            formatted_lines.append(f'\n#### {num} {title}\n')
+            in_list_context = False
+        elif level2_match:
+            num, title = level2_match.groups()
+            title = title.strip()
+            formatted_lines.append(f'\n### {num} {title}\n')
+            in_list_context = False
+        elif level1_match and not is_list_item:
+            num, title = level1_match.groups()
+            title = title.strip()
+            # 一级标题使用特殊样式
+            formatted_lines.append(f'\n## {num}、{title}\n')
+            in_list_context = False
+        else:
+            # 对于普通行，保持原样但清理格式
+            # 处理列表项格式，确保 **xxx** 格式正确
+            processed_line = line
+            # 如果是数字开头的列表项，转换为有序列表格式
+            list_item_match = re.match(r'^(\d+)[、\.．]\s*(.+)$', clean_line)
+            if list_item_match and is_list_item:
+                num, text = list_item_match.groups()
+                processed_line = f'{num}. {text}'
+            formatted_lines.append(processed_line)
+    
+    return '\n'.join(formatted_lines)
+
+
+def render_prd_document(content: str, title: str = "策划案"):
+    """
+    以美观的文档格式渲染策划案内容
+    
+    Args:
+        content: 策划案内容
+        title: 文档标题
+    """
+    import re
+    
+    # 格式化内容
+    formatted_content = format_prd_content(content)
+    
+    # 将Markdown转换为HTML以便在自定义容器中正确显示
+    # 处理标题
+    html_content = formatted_content
+    
+    # 转换 ## 标题为 h2
+    html_content = re.sub(r'^## (.+)$', r'<h2>\1</h2>', html_content, flags=re.MULTILINE)
+    # 转换 ### 标题为 h3
+    html_content = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html_content, flags=re.MULTILINE)
+    # 转换 #### 标题为 h4
+    html_content = re.sub(r'^#### (.+)$', r'<h4>\1</h4>', html_content, flags=re.MULTILINE)
+    
+    # 转换加粗文本
+    html_content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html_content)
+    
+    # 转换列表项 (- 开头)
+    html_content = re.sub(r'^- (.+)$', r'<li>\1</li>', html_content, flags=re.MULTILINE)
+    
+    # 转换有序列表项 (1. 开头)
+    html_content = re.sub(r'^(\d+)\. (.+)$', r'<li>\2</li>', html_content, flags=re.MULTILINE)
+    
+    # 将连续的 <li> 包裹在 <ul> 中
+    html_content = re.sub(r'((?:<li>.*?</li>\s*)+)', r'<ul>\1</ul>', html_content, flags=re.DOTALL)
+    
+    # 转换段落（非空行且不是HTML标签开头的行）
+    lines = html_content.split('\n')
+    processed_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('<') and not stripped.startswith('#'):
+            processed_lines.append(f'<p>{stripped}</p>')
+        else:
+            processed_lines.append(line)
+    html_content = '\n'.join(processed_lines)
+    
+    # 清理多余的空行
+    html_content = re.sub(r'\n{3,}', '\n\n', html_content)
+    
+    # 使用Streamlit渲染整个文档（包括标题和内容）在同一个容器中
+    st.markdown(f"""
+    <div class="prd-document">
+        <div style="text-align: center; margin-bottom: 25px;">
+            <h1 style="color: #1a73e8; border-bottom: 2px solid #1a73e8; padding-bottom: 10px; display: inline-block; margin: 0;">
+                📄 {title}
+            </h1>
+        </div>
+        <div class="prd-content">
+            {html_content}
+        </div>
+        <hr style="border: none; border-top: 1px dashed #ccc; margin-top: 30px;">
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def is_file_upload_supported() -> bool:
     """检查当前选择的模型是否支持文件上传"""
     current_model = get_selected_model()
@@ -925,6 +1297,147 @@ def call_gemini(prompt: str, system_prompt: str = "") -> Optional[str]:
         return None
 
 
+def call_gemini_with_image(image_data: bytes, prompt: str, system_prompt: str = "", mime_type: str = "image/png") -> Optional[str]:
+    """
+    调用Gemini API处理图片（非流式）
+    
+    Args:
+        image_data: 图片的字节数据
+        prompt: 用户输入的提示词
+        system_prompt: 系统提示词
+        mime_type: 图片的MIME类型（image/png, image/jpeg, application/pdf）
+    
+    Returns:
+        API返回的文本内容，失败返回None
+    """
+    try:
+        client = get_gemini_client()
+        if client is None:
+            return None
+        
+        # 构建配置
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt if system_prompt else None
+        )
+        
+        # 构建包含图片的内容
+        contents = [
+            types.Part.from_bytes(data=image_data, mime_type=mime_type),
+            prompt
+        ]
+        
+        response = client.models.generate_content(
+            model=get_selected_model(),
+            contents=contents,
+            config=config
+        )
+        return response.text
+    except Exception as e:
+        st.error(f"图片处理API调用失败: {str(e)}")
+        st.session_state.last_error = str(e)
+        return None
+
+
+def call_gemini_with_image_stream(image_data: bytes, prompt: str, system_prompt: str = "", mime_type: str = "image/png", thinking_container=None) -> Generator[dict, None, None]:
+    """
+    流式调用Gemini API处理图片，支持中止、错误展示和自动重试
+    
+    Args:
+        image_data: 图片的字节数据
+        prompt: 用户输入的提示词
+        system_prompt: 系统提示词
+        mime_type: 图片的MIME类型
+        thinking_container: 用于显示思考过程的容器（可选）
+    
+    Yields:
+        dict: {"type": "text"|"thinking"|"error"|"retry", "content": str}
+    """
+    # 清空之前的错误
+    st.session_state.last_error = ""
+    st.session_state.thinking_content = ""
+    
+    # 重试配置
+    max_retries = 3
+    retry_delay = 5
+    retryable_errors = ["503", "429", "overloaded", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "rate limit"]
+    
+    for attempt in range(max_retries):
+        try:
+            client = get_gemini_client()
+            if client is None:
+                yield {"type": "error", "content": "API客户端初始化失败，请检查API Key"}
+                return
+            
+            # 构建配置
+            config = types.GenerateContentConfig(
+                system_instruction=system_prompt if system_prompt else None,
+                thinking_config=types.ThinkingConfig(
+                    thinking_budget=10000
+                ) if "2.5" in get_selected_model() or "think" in get_selected_model().lower() else None
+            )
+            
+            # 构建包含图片的内容
+            contents = [
+                types.Part.from_bytes(data=image_data, mime_type=mime_type),
+                prompt
+            ]
+            
+            # 使用流式API
+            response_stream = client.models.generate_content_stream(
+                model=get_selected_model(),
+                contents=contents,
+                config=config
+            )
+            
+            for chunk in response_stream:
+                # 检查是否需要中止
+                if st.session_state.should_stop:
+                    yield {"type": "stopped", "content": "用户已中止生成"}
+                    st.session_state.should_stop = False
+                    return
+                
+                # 处理思考过程（如果有）
+                if hasattr(chunk, 'candidates') and chunk.candidates:
+                    for candidate in chunk.candidates:
+                        if hasattr(candidate, 'content') and candidate.content:
+                            for part in candidate.content.parts:
+                                # 检查是否是思考内容 - thought 属性直接包含思考文本
+                                thinking_text = ""
+                                
+                                # thought 属性直接包含思考文本
+                                if hasattr(part, 'thought') and part.thought:
+                                    thinking_text = part.thought
+                                
+                                if thinking_text:
+                                    st.session_state.thinking_content += thinking_text
+                                    yield {"type": "thinking", "content": thinking_text}
+                                elif hasattr(part, 'text') and part.text:
+                                    yield {"type": "text", "content": part.text}
+                elif chunk.text:
+                    yield {"type": "text", "content": chunk.text}
+            
+            return
+                    
+        except Exception as e:
+            error_msg = str(e)
+            st.session_state.last_error = error_msg
+            
+            is_retryable = any(err_key in error_msg for err_key in retryable_errors)
+            
+            if is_retryable and attempt < max_retries - 1:
+                remaining = max_retries - attempt - 1
+                yield {
+                    "type": "retry", 
+                    "content": f"⚠️ 服务暂时不可用 ({error_msg[:50]}...)，{retry_delay}秒后自动重试（剩余{remaining}次）..."
+                }
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30)
+                continue
+            else:
+                yield {"type": "error", "content": error_msg}
+                return
+
+
 def call_gemini_stream(prompt: str, system_prompt: str = "", thinking_container=None) -> Generator[dict, None, None]:
     """
     流式调用Gemini API，支持中止、错误展示、思考过程和自动重试
@@ -953,14 +1466,24 @@ def call_gemini_stream(prompt: str, system_prompt: str = "", thinking_container=
                 yield {"type": "error", "content": "API客户端初始化失败，请检查API Key"}
                 return
             
+            # 获取当前选择的模型
+            selected_model = get_selected_model()
+            
+            # 判断是否启用思考模式
+            enable_thinking = "2.5" in selected_model or "think" in selected_model.lower()
+            print(f"[DEBUG] Selected model: {selected_model}")
+            print(f"[DEBUG] Enable thinking: {enable_thinking}")
+            
             # 构建配置 - 启用思考过程（如果模型支持）
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt if system_prompt else None,
                 # 尝试启用思考模式（部分模型支持）
                 thinking_config=types.ThinkingConfig(
                     thinking_budget=10000  # 允许的思考token数
-                ) if "2.5" in get_selected_model() or "think" in get_selected_model().lower() else None
+                ) if enable_thinking else None
             )
+            
+            print(f"[DEBUG] Config thinking_config: {config.thinking_config}")
             
             # 使用流式API
             response_stream = client.models.generate_content_stream(
@@ -968,6 +1491,9 @@ def call_gemini_stream(prompt: str, system_prompt: str = "", thinking_container=
                 contents=prompt,
                 config=config
             )
+            
+            # 调试标记，只打印一次
+            debug_printed = False
             
             for chunk in response_stream:
                 # 检查是否需要中止
@@ -981,9 +1507,30 @@ def call_gemini_stream(prompt: str, system_prompt: str = "", thinking_container=
                     for candidate in chunk.candidates:
                         if hasattr(candidate, 'content') and candidate.content:
                             for part in candidate.content.parts:
-                                # 检查是否是思考内容
+                                # 获取 part 的类型名（用于调试和检测）
+                                part_type = type(part).__name__
+                                
+                                # 调试：打印 part 的所有属性（仅首次）
+                                if not debug_printed:
+                                    part_attrs = [attr for attr in dir(part) if not attr.startswith('_')]
+                                    print(f"[DEBUG call_gemini_stream] Part type: {part_type}")
+                                    print(f"[DEBUG call_gemini_stream] Part attributes: {part_attrs}")
+                                    # 打印一些关键属性的值
+                                    for attr in ['thought', 'thinking', 'text']:
+                                        if hasattr(part, attr):
+                                            val = getattr(part, attr)
+                                            print(f"[DEBUG call_gemini_stream] part.{attr} = {repr(val)[:100] if val else None}")
+                                    debug_printed = True
+                                
+                                # 检查是否是思考内容 - thought 属性直接包含思考文本
+                                thinking_text = ""
+                                
+                                # 方式1: 检查 thought 属性（直接包含思考文本）
                                 if hasattr(part, 'thought') and part.thought:
-                                    thinking_text = part.text if hasattr(part, 'text') else str(part)
+                                    thinking_text = part.thought
+                                    print(f"[DEBUG] Found thinking content: {thinking_text[:50]}...")
+                                
+                                if thinking_text:
                                     st.session_state.thinking_content += thinking_text
                                     yield {"type": "thinking", "content": thinking_text}
                                 elif hasattr(part, 'text') and part.text:
@@ -1116,9 +1663,9 @@ def generate_prd(user_input: str, use_stream: bool = False, container=None, thin
     prompt = f"请根据以下功能描述生成完整的策划案：\n\n{user_input}"
     
     if use_stream and container:
-        return stream_to_container(prompt, GENERATE_PRD_SYSTEM_PROMPT, container, thinking_container, status_container)
+        return stream_to_container(prompt, get_system_prompt_with_date(GENERATE_PRD_SYSTEM_PROMPT), container, thinking_container, status_container)
     else:
-        result = call_gemini(prompt, GENERATE_PRD_SYSTEM_PROMPT)
+        result = call_gemini(prompt, get_system_prompt_with_date(GENERATE_PRD_SYSTEM_PROMPT))
         return (result, result is not None, st.session_state.last_error if not result else "")
 
 
@@ -1262,7 +1809,9 @@ def reflection_loop(initial_prd: str, max_iterations: int) -> tuple:
         with col_stop:
             if st.button(f"⏹️ 中止迭代", key=f"stop_iteration_{i}", type="secondary"):
                 st.session_state.should_stop = True
-                st.warning("正在中止...")
+                was_stopped = True
+                st.warning("⏹️ 迭代已中止")
+                return (current_prd, True)
         
         # 角色A: 开发人员审查
         with st.expander(f"📋 第 {i + 1} 轮 - 开发人员审查", expanded=True):
@@ -1348,6 +1897,216 @@ def main():
         layout="wide"
     )
     
+    # 自定义CSS样式 - 优化文档显示效果
+    st.markdown("""
+    <style>
+    /* 策划案文档容器样式 */
+    .prd-document {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 30px 40px;
+        margin: 20px 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        line-height: 1.8;
+        font-size: 15px;
+    }
+    
+    /* 深色模式适配 */
+    @media (prefers-color-scheme: dark) {
+        .prd-document {
+            background-color: #1e1e1e;
+            border-color: #3a3a3a;
+        }
+    }
+    
+    /* 标题样式 */
+    .prd-document h1 {
+        font-size: 24px;
+        color: #1a73e8;
+        border-bottom: 2px solid #1a73e8;
+        padding-bottom: 10px;
+        margin: 30px 0 20px 0;
+    }
+    
+    .prd-document h2 {
+        font-size: 20px;
+        color: #1a73e8;
+        border-left: 4px solid #1a73e8;
+        padding-left: 12px;
+        margin: 25px 0 15px 0;
+    }
+    
+    .prd-document h3 {
+        font-size: 17px;
+        color: #333;
+        margin: 20px 0 12px 0;
+    }
+    
+    .prd-document h4 {
+        font-size: 15px;
+        color: #555;
+        margin: 15px 0 10px 0;
+        font-weight: 600;
+    }
+    
+    /* 内容区域 */
+    .prd-content {
+        padding: 10px 0;
+    }
+    
+    /* 段落样式 */
+    .prd-document p {
+        margin: 12px 0;
+        text-align: justify;
+        line-height: 1.8;
+    }
+    
+    /* 列表样式 */
+    .prd-document ul, .prd-document ol {
+        margin: 15px 0;
+        padding-left: 25px;
+    }
+    
+    .prd-document li {
+        margin: 8px 0;
+        line-height: 1.7;
+    }
+    
+    /* 加粗文本高亮 */
+    .prd-document strong {
+        color: #d93025;
+        font-weight: 600;
+    }
+    
+    /* 代码块样式 */
+    .prd-document code {
+        background-color: #f5f5f5;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: 'Consolas', monospace;
+    }
+    
+    /* 分隔线 */
+    .prd-document hr {
+        border: none;
+        border-top: 1px dashed #ccc;
+        margin: 25px 0;
+    }
+    
+    /* 一级章节标题（数字开头如 1、功能概述）*/
+    .prd-section-title {
+        font-size: 18px;
+        font-weight: bold;
+        color: #1a73e8;
+        background: linear-gradient(90deg, #e8f0fe 0%, transparent 100%);
+        padding: 10px 15px;
+        margin: 25px 0 15px 0;
+        border-left: 4px solid #1a73e8;
+        border-radius: 0 6px 6px 0;
+    }
+    
+    /* 二级标题 */
+    .prd-subsection-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #333;
+        margin: 18px 0 10px 0;
+        padding-left: 10px;
+        border-left: 3px solid #4285f4;
+    }
+    
+    /* 内容块 */
+    .prd-content-block {
+        padding: 10px 15px;
+        margin: 10px 0;
+        background-color: #fafafa;
+        border-radius: 6px;
+    }
+    
+    /* Streamlit默认markdown增强 */
+    .stMarkdown {
+        line-height: 1.8;
+    }
+    
+    .stMarkdown p {
+        margin-bottom: 12px;
+    }
+    
+    /* 统一标题样式 - 清晰的层级区分，去除红色主题 */
+    .stMarkdown h1 {
+        font-size: 1.75em;
+        font-weight: 700;
+        color: #1f2937 !important;
+        border-bottom: 2px solid #e5e7eb;
+        padding-bottom: 8px;
+        margin-top: 28px;
+        margin-bottom: 16px;
+    }
+    
+    .stMarkdown h2 {
+        font-size: 1.4em;
+        font-weight: 600;
+        color: #374151 !important;
+        border-bottom: 1px solid #e5e7eb;
+        padding-bottom: 6px;
+        margin-top: 24px;
+        margin-bottom: 14px;
+    }
+    
+    .stMarkdown h3 {
+        font-size: 1.2em;
+        font-weight: 600;
+        color: #4b5563 !important;
+        margin-top: 20px;
+        margin-bottom: 12px;
+    }
+    
+    .stMarkdown h4 {
+        font-size: 1.1em;
+        font-weight: 600;
+        color: #6b7280 !important;
+        margin-top: 16px;
+        margin-bottom: 10px;
+    }
+    
+    .stMarkdown h5, .stMarkdown h6 {
+        font-size: 1em;
+        font-weight: 600;
+        color: #6b7280 !important;
+        margin-top: 14px;
+        margin-bottom: 8px;
+    }
+    
+    /* 深色模式标题适配 */
+    @media (prefers-color-scheme: dark) {
+        .stMarkdown h1 {
+            color: #f3f4f6 !important;
+            border-bottom-color: #4b5563;
+        }
+        .stMarkdown h2 {
+            color: #e5e7eb !important;
+            border-bottom-color: #4b5563;
+        }
+        .stMarkdown h3 {
+            color: #d1d5db !important;
+        }
+        .stMarkdown h4, .stMarkdown h5, .stMarkdown h6 {
+            color: #9ca3af !important;
+        }
+    }
+    
+    .stMarkdown ul, .stMarkdown ol {
+        margin: 12px 0;
+        padding-left: 24px;
+    }
+    
+    .stMarkdown li {
+        margin: 6px 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # 初始化session_state
     if "generated_prd" not in st.session_state:
         st.session_state.generated_prd = ""
@@ -1389,6 +2148,9 @@ def main():
         st.session_state.models_list = AVAILABLE_MODELS
     if "api_key_validated" not in st.session_state:
         st.session_state.api_key_validated = False
+    # 自动验证标志
+    if "auto_validate_api_key" not in st.session_state:
+        st.session_state.auto_validate_api_key = False
     # 中止控制
     if "should_stop" not in st.session_state:
         st.session_state.should_stop = False
@@ -1422,10 +2184,12 @@ def main():
                     placeholder="留空则使用云端配置的 Key",
                     help="如需使用自己的 API Key，请在此输入"
                 )
-                if custom_api_key:
+                if custom_api_key and custom_api_key != st.session_state.api_key:
                     st.session_state.api_key = custom_api_key
                     st.session_state.secrets_api_key_loaded = False
                     st.session_state.api_key_validated = False
+                    # 自动触发验证
+                    st.session_state.auto_validate_api_key = True
                     st.rerun()
             api_key_input = st.session_state.api_key
         else:
@@ -1438,16 +2202,33 @@ def main():
                 help="请前往 Google AI Studio 获取 API Key: https://aistudio.google.com/apikey"
             )
             
-            # 检测API Key变化
+            # 检测API Key变化 - 自动触发验证
             if api_key_input != st.session_state.api_key:
                 st.session_state.api_key = api_key_input
                 st.session_state.api_key_validated = False
                 st.session_state.models_list = AVAILABLE_MODELS
+                # 如果新的API Key非空，自动触发验证
+                if api_key_input:
+                    st.session_state.auto_validate_api_key = True
+                    st.rerun()
         
-        # 验证并获取模型列表按钮
+        # 自动验证API Key（当检测到需要自动验证时）
+        if st.session_state.get('auto_validate_api_key', False) and api_key_input:
+            st.session_state.auto_validate_api_key = False
+            with st.spinner("正在自动验证API Key并获取模型列表..."):
+                models = fetch_available_models()
+                if models:
+                    st.session_state.models_list = models
+                    st.session_state.api_key_validated = True
+                    st.success(f"✅ 验证成功！获取到 {len(models)} 个可用模型")
+                else:
+                    st.error("❌ API Key 无效或无法获取模型列表")
+                    st.session_state.api_key_validated = False
+        
+        # 验证并获取模型列表按钮（手动刷新）
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🔄 验证 & 刷新模型", disabled=not api_key_input):
+            if st.button("🔄 刷新模型列表", disabled=not api_key_input):
                 if api_key_input:
                     with st.spinner("正在验证API Key并获取模型列表..."):
                         models = fetch_available_models()
@@ -1597,7 +2378,7 @@ def main():
             if history_item.get("download_data"):
                 st.download_button(
                     label=f"📥 下载 {history_item.get('download_filename', '文件')}",
-                    data=history_item["download_data"],
+                    data=get_download_data(history_item),
                     file_name=history_item.get("download_filename", "download.txt"),
                     mime=history_item.get("download_mime", "text/plain"),
                     key=f"history_download_{history_id}"
@@ -1608,7 +2389,7 @@ def main():
     # 功能选择
     function_mode = st.selectbox(
         "🔧 功能选择",
-        options=["生成策划案", "优化策划案", "汇报助手", "周报助手", "白皮书助手"],
+options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报助手", "周报助手", "白皮书助手", "游戏策划(lina)"],
         help="选择要使用的功能"
     )
     
@@ -1724,7 +2505,10 @@ def main():
             with col_stop:
                 if st.button("⏹️ 中止生成", key="stop_generate", type="secondary"):
                     st.session_state.should_stop = True
-                    st.warning("正在中止...")
+                    st.session_state.is_processing = False
+                    st.session_state.current_stage = "idle"
+                    st.warning("⏹️ 生成已中止")
+                    st.rerun()
             
             # 思考过程展示区域（可折叠）
             thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
@@ -1779,9 +2563,8 @@ def main():
         
         # 处理检查阶段
         elif st.session_state.is_processing and st.session_state.current_stage == "checking":
-            # 显示已生成的策划案
-            st.markdown("### 📄 生成的策划案")
-            st.markdown(st.session_state.generated_prd)
+            # 显示已生成的策划案（格式化显示）
+            render_prd_document(st.session_state.generated_prd, "生成的策划案")
             st.success("✅ 策划案生成完成！")
             
             # AI自检 - 流式输出
@@ -1794,7 +2577,10 @@ def main():
             with col_stop:
                 if st.button("⏹️ 中止检查", key="stop_check", type="secondary"):
                     st.session_state.should_stop = True
-                    st.warning("正在中止...")
+                    st.session_state.is_processing = False
+                    st.session_state.current_stage = "idle"
+                    st.warning("⏹️ 检查已中止")
+                    st.rerun()
             
             # 思考过程展示区域
             thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
@@ -1826,8 +2612,8 @@ def main():
         
         # 显示已保存的生成结果（非处理中状态）
         if st.session_state.generated_prd and not st.session_state.is_processing:
-            st.markdown("### 📄 生成的策划案")
-            st.markdown(st.session_state.generated_prd)
+            # 使用格式化显示函数
+            render_prd_document(st.session_state.generated_prd, "生成的策划案")
             
             # 显示AI自检结果
             if st.session_state.generated_check_result:
@@ -1906,7 +2692,7 @@ def main():
                 function_context = f"""【已生成的策划案】
 {st.session_state.generated_prd}"""
                 
-                history_context = build_chat_context(chat_key, GENERATE_PRD_SYSTEM_PROMPT)
+                history_context = build_chat_context(chat_key, get_system_prompt_with_date(GENERATE_PRD_SYSTEM_PROMPT))
                 full_prompt = f"""{function_context}
 
 {history_context}
@@ -1919,7 +2705,7 @@ def main():
                 with st.spinner("正在思考..."):
                     response_container = st.empty()
                     full_response = ""
-                    for chunk in call_gemini_stream(full_prompt, GENERATE_PRD_SYSTEM_PROMPT):
+                    for chunk in call_gemini_stream(full_prompt, get_system_prompt_with_date(GENERATE_PRD_SYSTEM_PROMPT)):
                         if chunk["type"] == "text":
                             full_response += chunk["content"]
                             response_container.markdown(full_response + "▌")
@@ -1931,6 +2717,304 @@ def main():
                         response_container.markdown(full_response)
                         add_chat_message(chat_key, "assistant", full_response)
                         st.rerun()
+    
+    elif function_mode == "脑图生成策划案":
+        st.markdown("### 🧠 脑图生成策划案")
+        st.markdown("上传思维脑图图片，AI将识别结构并生成完整的策划案。")
+        
+        # 初始化脑图相关的session state
+        if "mindmap_parsed_structure" not in st.session_state:
+            st.session_state.mindmap_parsed_structure = None
+        if "mindmap_generated_prd" not in st.session_state:
+            st.session_state.mindmap_generated_prd = None
+        if "mindmap_image_data" not in st.session_state:
+            st.session_state.mindmap_image_data = None
+        if "mindmap_saved" not in st.session_state:
+            st.session_state.mindmap_saved = False
+        
+        # 文件上传区域
+        uploaded_mindmap = st.file_uploader(
+            "📤 上传思维脑图",
+            type=["jpg", "jpeg", "png", "pdf"],
+            help="支持 JPG、PNG 格式的图片或 PDF 文件",
+            key="mindmap_uploader"
+        )
+        
+        # 显示上传的图片预览
+        if uploaded_mindmap:
+            file_type = uploaded_mindmap.type
+            file_data = uploaded_mindmap.read()
+            
+            # 图片预览
+            if file_type in ["image/jpeg", "image/png"]:
+                st.image(file_data, caption="上传的思维脑图", use_container_width=True)
+            elif file_type == "application/pdf":
+                st.info("📄 已上传 PDF 文件，AI将尝试解析其中的思维脑图内容")
+            
+            # 保存图片数据到session state
+            st.session_state.mindmap_image_data = {
+                "data": file_data,
+                "mime_type": file_type,
+                "name": uploaded_mindmap.name
+            }
+        
+        # 补充说明输入
+        additional_info = st.text_area(
+            "📝 补充说明（可选）",
+            height=100,
+            placeholder="如有其他需求或背景信息，请在此输入...\n例如：这是一个MMORPG游戏的社交系统设计",
+            key="mindmap_additional_info"
+        )
+        
+        # 操作按钮
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            parse_btn = st.button(
+                "🔍 解析脑图结构",
+                disabled=not st.session_state.mindmap_image_data,
+                use_container_width=True
+            )
+        
+        with col2:
+            generate_btn = st.button(
+                "📝 生成策划案",
+                disabled=not st.session_state.mindmap_parsed_structure,
+                use_container_width=True
+            )
+        
+        with col3:
+            clear_btn = st.button(
+                "🗑️ 清空重来",
+                use_container_width=True
+            )
+        
+        if clear_btn:
+            st.session_state.mindmap_parsed_structure = None
+            st.session_state.mindmap_generated_prd = None
+            st.session_state.mindmap_image_data = None
+            st.session_state.mindmap_saved = False
+            st.rerun()
+        
+        # 解析脑图结构
+        if parse_btn and st.session_state.mindmap_image_data:
+            st.markdown("---")
+            st.markdown("#### 🔄 正在解析思维脑图...")
+            
+            image_info = st.session_state.mindmap_image_data
+            
+            # 创建显示容器
+            thinking_container = st.expander("💭 AI思考过程", expanded=False)
+            status_container = st.empty()
+            result_container = st.empty()
+            
+            parse_prompt = "请仔细分析这张思维脑图图片，识别出所有的节点、层级关系和连接，将其转换为结构化的文本格式。"
+            
+            if additional_info:
+                parse_prompt += f"\n\n补充背景信息：{additional_info}"
+            
+            # 流式解析
+            full_response = ""
+            thinking_text = ""
+            
+            for chunk_data in call_gemini_with_image_stream(
+                image_info["data"],
+                parse_prompt,
+                MINDMAP_PARSE_SYSTEM_PROMPT,
+                image_info["mime_type"],
+                thinking_container
+            ):
+                chunk_type = chunk_data.get("type", "text")
+                chunk_content = chunk_data.get("content", "")
+                
+                if chunk_type == "text":
+                    full_response += chunk_content
+                    result_container.markdown(full_response + " ▌")
+                elif chunk_type == "thinking":
+                    thinking_text += chunk_content
+                    with thinking_container:
+                        st.markdown(thinking_text)
+                elif chunk_type == "retry":
+                    status_container.warning(chunk_content)
+                elif chunk_type == "error":
+                    status_container.error(f"❌ 解析失败: {chunk_content}")
+                elif chunk_type == "stopped":
+                    status_container.warning("⚠️ 用户已中止")
+            
+            if full_response:
+                result_container.markdown(full_response)
+                st.session_state.mindmap_parsed_structure = full_response
+                status_container.success('✅ 脑图结构解析完成！请点击"生成策划案"按钮继续。')
+                st.rerun()
+        
+        # 显示已解析的结构
+        if st.session_state.mindmap_parsed_structure:
+            st.markdown("---")
+            st.markdown("#### 📋 解析出的脑图结构")
+            with st.expander("查看/编辑解析结果", expanded=True):
+                edited_structure = st.text_area(
+                    "解析结果（可手动编辑修正）",
+                    value=st.session_state.mindmap_parsed_structure,
+                    height=300,
+                    key="mindmap_structure_editor"
+                )
+                if edited_structure != st.session_state.mindmap_parsed_structure:
+                    st.session_state.mindmap_parsed_structure = edited_structure
+        
+        # 生成策划案
+        if generate_btn and st.session_state.mindmap_parsed_structure:
+            st.markdown("---")
+            st.markdown("#### 🔄 正在生成策划案...")
+            
+            # 创建显示容器
+            thinking_container = st.expander("💭 AI思考过程", expanded=False)
+            status_container = st.empty()
+            result_container = st.empty()
+            
+            generate_prompt = f"""请根据以下思维脑图结构生成完整的策划案：
+
+【思维脑图结构】
+{st.session_state.mindmap_parsed_structure}
+"""
+            
+            if additional_info:
+                generate_prompt += f"\n【补充说明】\n{additional_info}"
+            
+            # 流式生成
+            full_response = ""
+            thinking_text = ""
+            
+            for chunk_data in call_gemini_stream(generate_prompt, get_system_prompt_with_date(MINDMAP_TO_PRD_SYSTEM_PROMPT), thinking_container):
+                chunk_type = chunk_data.get("type", "text")
+                chunk_content = chunk_data.get("content", "")
+                
+                if chunk_type == "text":
+                    full_response += chunk_content
+                    result_container.markdown(full_response + " ▌")
+                elif chunk_type == "thinking":
+                    thinking_text += chunk_content
+                    with thinking_container:
+                        st.markdown(thinking_text)
+                elif chunk_type == "retry":
+                    status_container.warning(chunk_content)
+                elif chunk_type == "error":
+                    status_container.error(f"❌ 生成失败: {chunk_content}")
+                elif chunk_type == "stopped":
+                    status_container.warning("⚠️ 用户已中止")
+            
+            if full_response:
+                result_container.empty()
+                st.session_state.mindmap_generated_prd = full_response
+                st.session_state.mindmap_saved = False
+                status_container.success("✅ 策划案生成完成！")
+                st.rerun()
+        
+        # 显示生成的策划案
+        if st.session_state.mindmap_generated_prd:
+            st.markdown("---")
+            render_prd_document(st.session_state.mindmap_generated_prd, "生成的策划案（基于思维脑图）")
+            
+            # 保存到历史记录
+            if not st.session_state.mindmap_saved:
+                mindmap_name = st.session_state.mindmap_image_data.get("name", "思维脑图") if st.session_state.mindmap_image_data else "思维脑图"
+                excel_data = create_excel_file(st.session_state.mindmap_generated_prd)
+                add_to_history(
+                    function_type="脑图生成策划案",
+                    input_data={
+                        "脑图文件": mindmap_name,
+                        "解析结构": st.session_state.mindmap_parsed_structure[:200] + "..." if len(st.session_state.mindmap_parsed_structure) > 200 else st.session_state.mindmap_parsed_structure,
+                        "补充说明": additional_info if additional_info else "无"
+                    },
+                    output_data=st.session_state.mindmap_generated_prd,
+                    download_data=excel_data,
+                    download_filename=f"脑图策划案_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    download_mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                st.session_state.mindmap_saved = True
+            
+            # 下载按钮
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="📥 下载策划案 (Excel)",
+                    data=create_excel_file(st.session_state.mindmap_generated_prd),
+                    file_name=f"脑图策划案_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            with col2:
+                st.download_button(
+                    label="📥 下载策划案 (Markdown)",
+                    data=st.session_state.mindmap_generated_prd,
+                    file_name=f"脑图策划案_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                    mime="text/markdown",
+                    use_container_width=True
+                )
+            
+            # 多轮对话区域
+            st.markdown("---")
+            st.markdown("#### 💬 继续对话")
+            
+            chat_key = "mindmap_prd_chat"
+            init_chat_history(chat_key)
+            
+            # 显示对话历史
+            chat_history = get_chat_history(chat_key)
+            if chat_history:
+                for msg in chat_history:
+                    if msg["role"] == "user":
+                        st.markdown(f"**🧑 你：** {msg['content']}")
+                    else:
+                        st.markdown(f"**🤖 AI：** {msg['content']}")
+                st.markdown("---")
+            
+            # 对话输入
+            chat_input = st.text_input(
+                "继续提问或要求修改",
+                placeholder="例如：请补充一下技术实现方案...",
+                key="mindmap_chat_input"
+            )
+            
+            chat_col1, chat_col2 = st.columns([1, 4])
+            with chat_col1:
+                send_chat = st.button("发送", key="mindmap_send_chat", use_container_width=True)
+            with chat_col2:
+                clear_chat = st.button("清空对话", key="mindmap_clear_chat")
+            
+            if clear_chat:
+                clear_chat_history(chat_key)
+                st.rerun()
+            
+            if send_chat and chat_input:
+                add_chat_message(chat_key, "user", chat_input)
+                
+                # 构建上下文
+                context_prompt = f"""当前策划案内容：
+
+{st.session_state.mindmap_generated_prd}
+
+用户追问：{chat_input}
+
+请根据策划案内容回答用户的问题或进行相应修改。"""
+                
+                history_context = build_chat_context(chat_key, get_system_prompt_with_date(MINDMAP_TO_PRD_SYSTEM_PROMPT))
+                full_prompt = history_context + "\n\n" + context_prompt
+                
+                response_container = st.empty()
+                full_response = ""
+                
+                for chunk_data in call_gemini_stream(full_prompt, get_system_prompt_with_date(MINDMAP_TO_PRD_SYSTEM_PROMPT)):
+                    chunk_type = chunk_data.get("type", "text")
+                    chunk_content = chunk_data.get("content", "")
+                    
+                    if chunk_type == "text":
+                        full_response += chunk_content
+                        response_container.markdown(f"**🤖 AI：** {full_response} ▌")
+                
+                if full_response:
+                    response_container.markdown(f"**🤖 AI：** {full_response}")
+                    add_chat_message(chat_key, "assistant", full_response)
+                    st.rerun()
     
     elif function_mode == "优化策划案":
         st.markdown("### 🔄 优化现有策划案")
@@ -2065,7 +3149,10 @@ def main():
             with col_stop:
                 if st.button("⏹️ 中止", key="stop_initial", type="secondary"):
                     st.session_state.should_stop = True
-                    st.warning("正在中止...")
+                    st.session_state.optimize_processing = False
+                    st.session_state.optimize_stage = "idle"
+                    st.warning("⏹️ 优化已中止")
+                    st.rerun()
             
             # 思考过程展示区域
             thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
@@ -2155,7 +3242,10 @@ def main():
             with col_stop:
                 if st.button("⏹️ 中止检查", key="stop_final_check", type="secondary"):
                     st.session_state.should_stop = True
-                    st.warning("正在中止...")
+                    st.session_state.optimize_processing = False
+                    st.session_state.optimize_stage = "idle"
+                    st.warning("⏹️ 检查已中止")
+                    st.rerun()
             
             # 思考过程展示区域
             thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
@@ -2194,8 +3284,8 @@ def main():
         
         # 显示已保存的优化结果（非处理中状态）
         if st.session_state.optimized_prd and not st.session_state.is_processing:
-            st.markdown("### 📄 最终优化后的策划案")
-            st.markdown(st.session_state.optimized_prd)
+            # 使用格式化显示函数
+            render_prd_document(st.session_state.optimized_prd, "优化后的策划案")
             
             # 显示AI自检结果
             if st.session_state.optimized_check_result:
@@ -2366,7 +3456,9 @@ def main():
             with col_stop:
                 if st.button("⏹️ 中止生成", key="stop_report", type="secondary"):
                     st.session_state.should_stop = True
-                    st.warning("正在中止...")
+                    st.session_state.report_processing = False
+                    st.warning("⏹️ 生成已中止")
+                    st.rerun()
             
             # 思考过程展示区域
             thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
@@ -2437,8 +3529,8 @@ def main():
         
         # 显示已生成的汇报（非处理中状态）
         if st.session_state.generated_report and not st.session_state.report_processing:
-            st.markdown("### 📄 生成的汇报文案")
-            st.markdown(st.session_state.generated_report)
+            # 使用格式化显示函数
+            render_prd_document(st.session_state.generated_report, "汇报文案")
             
             # 复制按钮（使用下载按钮模拟）
             st.download_button(
@@ -2588,7 +3680,9 @@ def main():
             with col_stop:
                 if st.button("⏹️ 中止生成", key="stop_weekly", type="secondary"):
                     st.session_state.should_stop = True
-                    st.warning("正在中止...")
+                    st.session_state.weekly_report_processing = False
+                    st.warning("⏹️ 生成已中止")
+                    st.rerun()
             
             # 思考过程展示区域
             thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
@@ -2654,8 +3748,8 @@ Input Data (本周日报/工作记录):
         
         # 显示已生成的周报（非处理中状态）
         if st.session_state.generated_weekly_report and not st.session_state.weekly_report_processing:
-            st.markdown("### 📄 生成的周报")
-            st.markdown(st.session_state.generated_weekly_report)
+            # 使用格式化显示函数
+            render_prd_document(st.session_state.generated_weekly_report, "周报")
             
             # 下载按钮
             st.download_button(
@@ -2786,7 +3880,9 @@ Input Data (本周日报/工作记录):
             with col_stop:
                 if st.button("⏹️ 中止生成", key="stop_whitepaper", type="secondary"):
                     st.session_state.should_stop = True
-                    st.warning("正在中止...")
+                    st.session_state.whitepaper_processing = False
+                    st.warning("⏹️ 生成已中止")
+                    st.rerun()
             
             # 思考过程展示区域
             thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
@@ -2853,8 +3949,8 @@ Input Data (本周日报/工作记录):
         
         # 显示已生成的功能描述（非处理中状态）
         if st.session_state.generated_feature_desc and not st.session_state.whitepaper_processing:
-            st.markdown("### 📄 生成的功能描述")
-            st.markdown(st.session_state.generated_feature_desc)
+            # 使用格式化显示函数
+            render_prd_document(st.session_state.generated_feature_desc, "功能描述")
             
             # 下载按钮
             st.download_button(
@@ -2945,6 +4041,443 @@ Input Data (本周日报/工作记录):
                         response_container.markdown(full_response)
                         add_chat_message(chat_key, "assistant", full_response)
                         st.rerun()
+    
+    # ========== 精英策划案(lina版) 模块 ==========
+    elif function_mode == "游戏策划(lina)":
+        st.markdown("### 🎯 游戏策划(lina)")
+        st.markdown("与资深游戏策划专家进行多轮讨论，将需求提炼为结构化的功能点列表。")
+        
+        # Lina模块的System Prompt
+        LINA_SYSTEM_PROMPT = """#  step1：精英策划案讨论
+
+## 角色定位与核心人设
+
+你是一位在 **PUBG Mobile 项目组** 工作的 **顶级专业游戏策划**，同时也是一位擅长需求分析的顾问。你拥有下文详述的"精英游戏策划能力标准"中列出的全部能力。
+
+**核心人设：** 你是一个极其严苛的专家。你不会迎合我的任何错误观点，也不会对我表示不必要的尊敬或委婉。你的沟通风格直接、犀利，旨在以最高的效率达成最深刻的共识。对于逻辑严密、论据充分的观点，你会予以肯定；对于存在漏洞、思考不周或过于想当然的想法，你必须一针见血地指出问题所在，并引导我进行更深层次的思考。我们的共同目标是产出卓越的设计。
+
+## 核心任务与互动流程
+
+你的核心任务是与我协同工作，将我提出的初步需求或想法，通过严谨的、专家级的讨论，最终提炼成一份逻辑清晰、层级分明、可执行的核心功能点列表。
+
+**互动流程如下：**
+
+1.  **需求接收与审视：** 我会提出一个初步的需求、想法或想要讨论的功能方向。
+2.  **精英级研讨与推导 (核心环节):**
+    *   **严苛审视：** 你将立即启动分析，分解我的请求，识别其在 PUBG Mobile 生态下的**核心目标 (Why)**、**核心内容 (What)**、限制条件和潜在挑战。
+    *   **引用专业能力：** 在讨论中，你**必须主动引用下方"精英游戏策划能力标准"中的相关能力**来支撑你的分析、质疑和建议。例如："基于'用户体验与行为规划'和'核心玩法创新'的原则，我认为你这个想法的入口设计可能会破坏玩家的肌肉记忆，我们需要探讨更优的方案..."。
+    *   **引入案例：** 你会**主动引入竞品分析或行业内类似问题的解决方案作为参考**，对比不同方案的优劣，启发更深度的思考。
+    *   **聚焦逻辑链：** 我们的讨论将优先确保需求的**"为什么" (Why - 背景与目的)** 和 **"是什么" (What - 核心内容)** 逻辑清晰且论证充分。这个过程是对模糊想法的"压力测试"，目标是达成一个清晰、明确、且经过深思熟虑的共识。
+3.  **结构化列表输出：** 在我们对需求的关键点达成共识后，你将基于讨论结果，整理并输出一份符合下方格式和优化原则的功能点列表。
+
+## 输出要求与原则
+
+1.  **结构化的功能点列表 (最终产出):**
+    *   这份列表应**聚焦于"是什么" (What)**，即需要实现的核心功能、规则或改动。
+    *   列表必须**逻辑清晰、层级分明**，能够清楚地展示不同功能模块及其包含的具体要点。
+    *   你应根据讨论和对UGC生态的理解，补充我认为合理但可能遗漏的关联功能点。
+    *   **优化原则：**
+        *   `逻辑清晰 (Logical Clarity)`: 功能点按模块或流程合理分组。
+        *   `层级分明 (Clear Hierarchy)`: 使用清晰的层级结构展示功能间的关系。
+        *   `内容精炼 (Conciseness)`: 每个功能点用简洁、明确的语言描述，直击核心。
+        *   `重点明确 (Focus)`: 列表需准确反映讨论后确定的核心需求范围。
+        *   `具体可行 (Actionable)`: 功能点应描述具体需要实现的内容，而非模糊概念。
+
+2.  **最终输出格式:**
+    *   最终输出的功能点列表，请严格按照以下格式（**不要使用Markdown代码块包裹**）：
+        *   使用 `【一级功能/模块】` 标记最高层级。
+        *   使用 `「二级功能/子模块」` 标记次级层级。
+        *   使用 `- ` 开始描述具体的功能点或需求说明。
+        *   确保整体结构整齐、美观、易于阅读。
+
+---
+
+## 精英游戏策划能力标准：
+
+### 游戏行业认知与洞察
+
+#### 行业深度洞察
+- 深入掌握游戏行业完整发展历史与演变路径，能精确预测未来发展趋势
+- 对全球各主要市场的游戏生态系统有系统性理解，包括平台、用户、商业模式和监管环境
+- 对各类型游戏（例如MMORPG、MOBA、FPS、开放世界等）的经典作品与创新产品有全面的分析能力
+- 能识别市场中的创新机会点，并评估其发展潜力和风险
+
+#### 标杆分析能力
+- 精准把握该品类下各代表性产品的优劣势，能准确定位竞品在市场中的位置和策略
+- 深入理解行业标杆产品的成功要素和失败案例，能提炼出可复制的方法论
+- 能基于标杆分析结果制定正确的战略定位和产品方向
+- 拥有独到的行业观察视角，能发现竞品无法察觉的市场机会
+
+#### 行业影响力
+- 能在国际游戏会议（如GDC、Devcom等）发表有影响力的演讲和论文
+- 其设计理念和方法论被业内广泛采纳和引用
+- 能在游戏设计领域引领创新潮流，推动行业发展
+- 拥有广泛的行业人脉网络和资源，能迅速整合优质资源解决复杂问题
+
+### 游戏分析与理解
+
+#### 游戏体验拆解与分析
+- 能系统化分析任何类型游戏的核心体验元素，理解其设计意图与实现方式
+- 能精确识别游戏产品的感官、认知、情感和社交体验设计，并理解其相互作用
+- 能根据玩家行为数据和心理动机，反向推导游戏设计决策和效果
+- 熟练运用多种体验分析方法，如玩家旅程图、情绪曲线、行为图谱等
+
+#### 玩家行为与心理分析
+- 深入理解不同类型玩家的心理模型和动机系统（成就感、社交需求、自我表达等）
+- 能精准分析游戏机制对玩家决策行为的影响机制，包括短期和长期行为模式
+- 深刻把握玩家在不同游戏阶段的心理状态与需求变化
+- 能通过定量与定性分析方法，预测游戏设计变更对玩家行为的影响
+
+#### 框架分析与系统思维
+- 能迅速构建任何类型游戏的完整系统框架图，理解各子系统间的关联与平衡
+- 理解游戏各子系统的数据流向与信息交互模式，识别潜在瓶颈与优化点
+- 能透过表面现象看到游戏设计的本质结构和核心矛盾
+- 具备将复杂游戏系统抽象为简明模型的能力，并能基于此模型进行创新设计
+
+### 玩法与关卡设计
+
+#### 3C设计精通
+- 掌握多类型游戏的顶级3C设计理念与实现方法（角色控制、摄像机、碰撞检测）
+- 能针对不同平台（PC、主机、移动设备等）优化3C体验，创造流畅直观的操作感
+- 精通角色状态机设计，能创造行云流水的角色动作过渡与反馈系统
+- 能有效融合游戏的核心玩法和3C系统，创造独特的游戏体验基础
+
+#### 核心玩法创新
+- 能创造在业界具有开创性的核心玩法机制，引领游戏品类的发展方向
+- 精通多种思考模式的游戏设计（战略思考、反应能力、解谜推理、社交博弈等）
+- 能将不同类型游戏的优秀机制进行创新性融合，创造全新游戏体验
+- 具备将抽象创意转化为可实现游戏机制的能力，并能预见其平衡性与可扩展性
+
+#### 流程体验与空间设计
+- 掌握顶级游戏关卡和流程设计方法，能精确控制玩家情绪曲线和挑战梯度
+- 精通空间叙事与环境讲故事技巧，能通过环境设计传递故事和引导玩家行为
+- 能创造具有教科书级别的游戏空间结构，成为行业参考标准
+- 熟练应用各种空间引导手法（光影、色彩、音效、地形等）创造直观且深层次的体验
+
+#### 玩法整合与系统设计
+- 能将宏观系统、核心玩法、叙事元素、美术表现完美融合为统一的游戏体验
+- 能在复杂的游戏系统中创造多层次的玩家成长路径和自由度
+- 掌握多种游戏平衡技术，能在自由度和引导性之间找到最佳平衡点
+- 能设计支持长期运营的玩法系统架构，具备可持续扩展和迭代能力
+
+### 系统设计
+
+#### 宏观系统架构
+- 掌握多种类型游戏的系统架构设计方法论，能创建高度内聚、松耦合的系统结构
+- 能在系统设计中平衡产品目标、用户体验、技术实现和商业模式的多重需求
+- 精通游戏系统的分层设计，能创建灵活适应不同玩家群体的多层次系统
+- 能预见系统扩展和迭代中的潜在问题，并在设计中预留合理的解决方案
+
+#### 核心规则与机制设计
+- 能设计具有深度、平衡且具备创新性的游戏核心规则系统
+- 精通各类战斗、策略、收集、建造等核心系统的设计原理与最佳实践
+- 能将复杂规则简化为直观机制，平衡游戏的深度和可接受度
+- 能创建教科书级别的规则设计，被行业广泛参考和学习
+
+#### 用户体验与行为规划
+- 精通分层用户体验设计，能为不同熟练度、不同动机的用户提供差异化体验
+- 能设计精确引导玩家成长的系统路径，控制技能学习曲线和挑战升级节奏
+- 深刻理解并能设计针对不同情感需求的系统反馈机制
+- 能通过系统设计巧妙引导玩家行为，实现产品战略和商业目标
+
+#### 创新系统构建
+- 能基于深刻的游戏理解创造全新的系统设计范式，引领行业发展方向
+- 能将其他领域（如经济学、社会学、心理学等）的模型创新性地应用于游戏系统
+- 能设计高度适应不同文化和市场的弹性系统架构
+- 掌握系统复杂度管理方法，能在保持系统深度的同时确保可理解性和可维护性
+
+### 数值设计
+
+#### 数值模型架构
+- 掌握多种游戏类型的数值架构设计方法，能建立完整、自洽的数值体系
+- 精通数值系统的分层设计，能创建支持多种策略与玩法的丰富数值结构
+- 能将抽象设计理念精确转化为可量化的数值系统
+- 能设计具有高度扩展性和可维护性的数值架构，支持长期运营和内容更新
+
+#### 数据分析与平衡调优
+- 精通游戏数据的收集、分析和应用，能从海量数据中提取关键洞察
+- 熟练使用各类统计和数学工具进行数值模拟和预测
+- 能基于玩家行为数据进行精确的数值调整，优化游戏体验
+- 掌握自动化数值测试和平衡技术，提高数值调优效率和精确度
+
+#### 数值体系创新
+- 能将现实经济学模型创新应用于游戏设计，创造独特的经济系统
+- 能设计支持多样化游戏策略的平衡数值系统，创造深度的策略空间
+- 精通游戏中的概率系统设计，能创造公平且有趣的随机机制
+- 能预测游戏数值系统的长期演化趋势，设计可持续发展的数值生态
+
+#### 跨系统数值整合
+- 能协调整合战斗、成长、经济等多系统的数值关系，确保整体平衡和体验连贯
+- 精通不同系统间的资源流转设计，创建健康的游戏经济循环
+- 能设计支持多种变现模式的数值系统，平衡游戏体验和商业目标
+- 掌握多维度数值指标的平衡艺术，创造多样化且均衡的游戏体验
+
+### 叙事设计
+
+#### 世界观构建
+- 能创造具有高度原创性和内部一致性的游戏世界观体系
+- 精通不同类型游戏的世界观设计方法（奇幻、科幻、历史、现代等）
+- 能将世界观元素无缝融入游戏机制和视觉表现，创造沉浸式体验
+- 设计具有扩展潜力的世界体系，支持IP长期发展和跨媒体延伸
+
+#### 角色与情感设计
+- 能创造具有深度、独特性和成长弧的游戏角色，引发玩家情感共鸣
+- 精通不同类型游戏中的角色功能与叙事功能的平衡设计
+- 能设计多层次的角色关系网络，创造丰富的社交和叙事可能性
+- 掌握角色通过对话、行为和环境互动展现性格的技巧
+
+#### 叙事结构与表达
+- 掌握互动叙事的高级设计技巧，能根据不同游戏类型选择最佳叙事结构
+- 精通环境叙事、程序叙事、隐性叙事等多种叙事手法
+- 能将叙事元素与游戏机制和玩家行为紧密结合，创造真正的互动叙事体验
+- 能设计支持多重结局和玩家选择的分支叙事系统，确保各路径均有价值
+
+#### IP打造与跨媒体延展
+- 具备战略性IP规划能力，能设计支持长期发展的IP核心架构
+- 精通IP在不同媒介间的延展规则，确保跨媒体内容的一致性和互补性
+- 能将IP元素转化为可识别的视觉符号、音乐语言和核心理念
+- 能制定IP内容更新和演化策略，保持IP的生命力和市场吸引力
+
+### 项目管理与团队协作
+
+#### 设计领导力
+- 能提供清晰的创意愿景和设计方向，激发团队创造力
+- 精通设计目标的分解和任务分配，确保高效且高质量的设计实现
+- 具备在保持创意完整性的同时灵活适应资源和技术约束的能力
+- 能有效协调跨职能团队合作，确保设计理念在各环节的准确传达
+
+#### 设计沟通与文档
+- 能创建清晰、系统、易于理解的设计文档，有效传达设计意图
+- 精通各类设计工具和可视化方法，能直观展示复杂设计概念
+- 具备将抽象概念转化为具体原型的能力，快速验证设计想法
+- 能根据不同受众（团队成员、管理层、投资者等）调整设计沟通方式
+
+#### 项目风险管理
+- 能准确评估设计决策对项目进度、资源和质量的影响
+- 具备识别设计中潜在问题的前瞻性思维，制定预防和应对策略
+- 精通范围控制和优先级管理，确保核心设计目标的实现
+- 能在保持设计质量的前提下灵活调整计划，应对不确定性
+
+#### 团队培养与文化建设
+- 能系统化提升团队的设计能力，培养跨领域的游戏设计人才
+- 具备将个人经验和方法论转化为团队知识的能力
+- 能营造鼓励创新和实验的团队文化，平衡创意自由和项目目标
+- 精通设计评审和反馈机制，促进团队成员的持续成长
+
+### 用户洞察与市场理解
+
+#### 用户研究与数据分析
+- 精通各类用户研究方法（焦点小组、可用性测试、行为数据分析等）
+- 能从用户反馈和行为数据中提取有价值的设计洞察
+- 具备建立用户画像和行为模型的能力，指导针对性设计
+- 能预测设计变更对用户行为和体验的影响
+
+#### 市场趋势与竞品分析
+- 能准确把握全球游戏市场趋势和用户偏好变化
+- 精通竞品分析方法，能深入理解竞争产品的优劣势和策略
+- 具备识别市场空白和机会的敏锐洞察力
+- 能将市场分析转化为具体的产品策略和设计决策
+
+#### 商业模式与变现设计
+- 深入理解各类游戏商业模式的原理和最佳实践
+- 能设计与游戏体验和用户心理自然融合的变现系统
+- 精通不同市场和用户群体的消费心理和支付习惯
+- 能平衡短期收益和长期用户价值，设计可持续的商业系统
+
+#### 全球化与本地化策略
+- 精通不同文化背景下的游戏设计适配原则
+- 能设计支持全球化和深度本地化的游戏架构
+- 理解不同地区的法规、文化禁忌和用户偏好
+- 具备在保持产品核心价值的同时实现文化适配的能力
+
+### 创新与前瞻性思维
+
+#### 前沿技术应用
+- 深入了解AI、VR/AR、云游戏等前沿技术及其对游戏设计的影响
+- 能将新技术创新性地应用于游戏设计，创造全新体验
+- 具备评估新技术可行性和价值的能力，避免技术陷阱
+- 能预见技术发展趋势对游戏设计的长期影响
+
+#### 跨领域创新能力
+- 能将其他领域（心理学、社会学、文学、电影等）的理念应用于游戏设计
+- 具备从不相关领域汲取灵感的能力，创造独特游戏体验
+- 精通不同媒介叙事和表达特性，能进行创新性融合
+- 能将现实世界系统和模式抽象为有趣的游戏机制
+
+#### 实验设计与原型验证
+- 精通快速原型开发和测试方法，能高效验证设计假设
+- 具备设计有效实验评估游戏体验的能力
+- 能从失败实验中提取有价值的洞察和经验
+- 掌握渐进式设计方法，通过迭代改进实现创新
+
+#### 游戏设计思维创新
+- 能突破既有游戏设计框架，提出全新设计范式
+- 具备重新定义游戏类型或创造全新类型的能力
+- 能挑战行业常规，推动游戏媒介的艺术和表达边界
+- 掌握游戏设计的基础理论，并能进行创新性发展和应用
+
+---
+
+**互动开始:**
+
+好的，我已经理解并准备就绪。我将以PUBG Mobile精英策划的身份，遵循以上所有要求与你展开讨论。请提出你的初步需求或想法，我们将以最高效、最严谨的方式进行研讨。"""
+        
+        # 初始化lina模块专用的session state
+        if "lina_chat_history" not in st.session_state:
+            st.session_state.lina_chat_history = []
+        if "lina_max_rounds" not in st.session_state:
+            st.session_state.lina_max_rounds = 10
+        if "lina_is_processing" not in st.session_state:
+            st.session_state.lina_is_processing = False
+        
+        # 侧边栏设置：最大对话轮次
+        with st.sidebar:
+            st.markdown("---")
+            st.subheader("🎯 Lina对话设置")
+            lina_max_rounds = st.number_input(
+                "最大对话轮次限制",
+                min_value=1,
+                max_value=50,
+                value=st.session_state.lina_max_rounds,
+                step=1,
+                help="一轮对话 = 用户发送 + AI回复"
+            )
+            st.session_state.lina_max_rounds = lina_max_rounds
+            
+            # 显示当前轮次
+            current_rounds = len([m for m in st.session_state.lina_chat_history if m["role"] == "user"])
+            st.info(f"当前轮次: {current_rounds} / {lina_max_rounds}")
+            
+            # 清空对话按钮
+            if st.button("🗑️ 清空对话/重新开始", key="lina_clear_chat", use_container_width=True):
+                st.session_state.lina_chat_history = []
+                st.rerun()
+        
+        # 计算当前轮次（用户消息数）
+        current_rounds = len([m for m in st.session_state.lina_chat_history if m["role"] == "user"])
+        max_rounds_reached = current_rounds >= st.session_state.lina_max_rounds
+        
+        # 聊天显示区
+        st.markdown("#### 💬 对话区域")
+        
+        # 显示对话历史
+        chat_container = st.container()
+        with chat_container:
+            if not st.session_state.lina_chat_history:
+                st.info("👋 请在下方输入您的初步需求或想法，开始与精英策划专家讨论。")
+            else:
+                for msg in st.session_state.lina_chat_history:
+                    if msg["role"] == "user":
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
+                    else:
+                        with st.chat_message("assistant", avatar="🎯"):
+                            st.markdown(msg["content"])
+        
+        # 轮次达到上限提示
+        if max_rounds_reached:
+            st.warning(f'⚠️ 对话轮次已达上限（{st.session_state.lina_max_rounds}轮），请点击侧边栏的"清空对话/重新开始"按钮重新开始。')
+        
+        # 输入区
+        st.markdown("---")
+        
+        # 初始化Enter键状态
+        if "lina_enter_pressed" not in st.session_state:
+            st.session_state.lina_enter_pressed = False
+        
+        # 用于清空输入框的计数器（每次发送后增加，改变key强制重建组件）
+        if "lina_input_key_counter" not in st.session_state:
+            st.session_state.lina_input_key_counter = 0
+        
+        # 使用text_input + on_change 来支持Enter键发送
+        col_input, col_send = st.columns([6, 1])
+        with col_input:
+            lina_user_input = st.text_input(
+                "输入您的需求或想法",
+                placeholder="例如：我想设计一个PUBG Mobile的好友推荐系统...",
+                key=f"lina_chat_input_{st.session_state.lina_input_key_counter}",
+                disabled=max_rounds_reached or st.session_state.lina_is_processing,
+                label_visibility="collapsed",
+                on_change=lambda: st.session_state.update({"lina_enter_pressed": True})
+            )
+        
+        # 检测是否按下 Enter 键
+        enter_pressed = st.session_state.get("lina_enter_pressed", False)
+        if enter_pressed:
+            st.session_state.lina_enter_pressed = False
+        
+        with col_send:
+            send_button = st.button(
+                "发送",
+                key="lina_send_btn",
+                type="primary",
+                use_container_width=True,
+                disabled=max_rounds_reached or st.session_state.lina_is_processing
+            )
+        
+        # Enter 键或点击发送按钮都可以触发
+        should_send = (send_button or enter_pressed) and lina_user_input.strip() and not max_rounds_reached
+        
+        # 处理用户输入
+        if should_send:
+            st.session_state.lina_is_processing = True
+            
+            # 添加用户消息到历史
+            st.session_state.lina_chat_history.append({
+                "role": "user",
+                "content": lina_user_input.strip()
+            })
+            
+            # 构建完整的对话上下文
+            # System Prompt + 历史对话 + 当前输入
+            messages_context = ""
+            for msg in st.session_state.lina_chat_history:
+                if msg["role"] == "user":
+                    messages_context += f"\n\n【用户】\n{msg['content']}"
+                else:
+                    messages_context += f"\n\n【Lina】\n{msg['content']}"
+            
+            full_prompt = f"""请基于以下对话历史继续讨论：
+{messages_context}
+
+请以精英策划专家Lina的身份回复。"""
+            
+            # 流式生成回复
+            st.markdown("#### 🤖 Lina正在思考...")
+            
+            # 思考过程容器
+            thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
+            with thinking_expander:
+                thinking_container = st.empty()
+            
+            response_container = st.empty()
+            full_response = ""
+            thinking_text = ""
+            
+            for chunk in call_gemini_stream(full_prompt, LINA_SYSTEM_PROMPT):
+                if chunk["type"] == "text":
+                    full_response += chunk["content"]
+                    response_container.markdown(full_response + " ▌")
+                elif chunk["type"] == "thinking":
+                    thinking_text += chunk["content"]
+                    with thinking_expander:
+                        thinking_container.markdown(thinking_text)
+                elif chunk["type"] == "error":
+                    st.error(f"生成失败: {chunk['content']}")
+                    break
+            
+            if full_response:
+                response_container.markdown(full_response)
+                # 添加AI回复到历史
+                st.session_state.lina_chat_history.append({
+                    "role": "assistant",
+                    "content": full_response
+                })
+            
+            st.session_state.lina_is_processing = False
+            # 清空输入框（通过增加计数器改变key，强制重建组件）
+            st.session_state.lina_input_key_counter += 1
+            st.rerun()
     
     # 页脚
     st.markdown("---")
