@@ -10,6 +10,7 @@ from typing import Optional, Generator
 import io
 import re
 import time
+import tempfile
 import base64
 import json
 import os
@@ -60,6 +61,9 @@ SUPPORTED_FILE_TYPES = ["pdf", "docx", "txt", "md"]
 # 生成策划案的System Prompt
 GENERATE_PRD_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
 
+【回复语言】
+- 请始终使用中文进行回答和输出
+
 【语言约束】
 - 严禁在正文中使用英文（代码变量除外）
 - 不需要AI生成的功能用英文解释（例如不要写 "Feature Overview"，必须写 "功能概述"）
@@ -91,6 +95,9 @@ GENERATE_PRD_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
 
 # 思维脑图解析的System Prompt
 MINDMAP_PARSE_SYSTEM_PROMPT = """你是一个专业的思维脑图解析专家。
+
+【回复语言】
+- 请始终使用中文进行回答和输出
 
 【任务】
 请仔细分析用户上传的思维脑图图片，识别出其中的所有节点和层级关系，并将其转换为结构化的文本格式。
@@ -125,6 +132,9 @@ MINDMAP_PARSE_SYSTEM_PROMPT = """你是一个专业的思维脑图解析专家�
 
 # 基于脑图结构生成策划案的System Prompt
 MINDMAP_TO_PRD_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
+
+【回复语言】
+- 请始终使用中文进行回答和输出
 
 【任务】
 根据用户提供的思维脑图结构（已解析为文本格式），生成完整的策划案文档。
@@ -161,6 +171,9 @@ MINDMAP_TO_PRD_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
 # 初始修正的System Prompt
 INITIAL_FIX_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
 
+【回复语言】
+- 请始终使用中文进行回答和输出
+
 请根据用户提供的旧策划案和修改意见，基于以下复检清单进行检查和修改：
 
 【复检清单】
@@ -188,6 +201,9 @@ INITIAL_FIX_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"。
 # 开发人员审查的System Prompt
 DEVELOPER_REVIEW_PROMPT = """你是一个挑剔的高级开发人员。
 
+【回复语言】
+- 请始终使用中文进行回答和输出
+
 请阅读当前的策划案，提出尖锐的问题，指出逻辑漏洞、缺少的技术细节或不明确的边缘情况。
 
 请只列出问题，不要修改文档。
@@ -199,6 +215,9 @@ DEVELOPER_REVIEW_PROMPT = """你是一个挑剔的高级开发人员。
 
 # 策划修改的System Prompt
 PLANNER_FIX_PROMPT = """你是策划酸奶。
+
+【回复语言】
+- 请始终使用中文进行回答和输出
 
 根据开发人员提出的以下问题，对策划案进行修改、补充和完善。
 
@@ -246,6 +265,9 @@ def get_system_prompt_with_date(prompt_template: str) -> str:
 # 汇报助手的System Prompt
 REPORT_ASSISTANT_SYSTEM_PROMPT = """# Role: 资深职场沟通专家
 
+# 回复语言:
+请始终使用中文进行回答和输出
+
 # Profile:
 你是一位擅长"向上管理"和"结构化表达"的职场助理。你能够将碎片化的工作信息转化为逻辑清晰、简明扼要、重点突出的汇报文案，专门用于向领导同步工作事项。
 
@@ -278,6 +300,8 @@ REPORT_ASSISTANT_SYSTEM_PROMPT = """# Role: 资深职场沟通专家
 
 # 周报助手的System Prompt
 WEEKLY_REPORT_SYSTEM_PROMPT = """Role: 你是一位资深的项目管理专家和运营分析师，擅长将零散的日常工作记录（日报）汇总、提炼并重构为逻辑清晰、重点突出的专业周报。
+
+回复语言: 请始终使用中文进行回答和输出
 
 Task: 请根据我提供的【本周日报/工作记录】，参考【目标风格范例】，生成一份高质量的周报。
 
@@ -312,6 +336,9 @@ Reference Example (目标风格范例):
 
 # 白皮书助手的System Prompt
 WHITEPAPER_ASSISTANT_SYSTEM_PROMPT = """# Role: PUBGM WoW模式 版本文档撰写助理
+
+# 回复语言:
+请始终使用中文进行回答和输出
 
 # Context:
 你正在协助整理PUBGM WoW模式（UGC玩法）的版本白皮书功能列表。用户会输入简单的功能关键词或短语，你需要将其扩写成一句标准、专业且信息量完整的版本功能陈述。
@@ -483,6 +510,70 @@ def clear_chat_history(chat_key: str):
     """
     st.session_state[chat_key] = []
 
+def clear_module_session(module_name: str):
+    """
+    清空指定模块的所有会话数据
+    
+    Args:
+        module_name: 模块名称
+    """
+    if module_name == "生成策划案":
+        st.session_state.generated_prd = ""
+        st.session_state.uploaded_file_content = ""
+        st.session_state.uploaded_file_name = ""
+        st.session_state.show_preview_gen = False
+        st.session_state.generated_check_result = ""
+        st.session_state.current_stage = "idle"
+        st.session_state.generate_saved_to_history = False
+        clear_chat_history("generate_prd_chat")
+    elif module_name == "脑图生成策划案":
+        st.session_state.mindmap_parsed_structure = None
+        st.session_state.mindmap_generated_prd = None
+        st.session_state.mindmap_image_data = None
+        st.session_state.mindmap_saved = False
+        st.session_state.mindmap_mermaid_code = ""
+        st.session_state.mindmap_input_mode = "图片上传"
+        clear_chat_history("mindmap_prd_chat")
+    elif module_name == "优化策划案":
+        st.session_state.optimized_prd = ""
+        st.session_state.optimize_saved_to_history = False
+        clear_chat_history("optimize_prd_chat")
+    elif module_name == "汇报助手":
+        if "generated_report" in st.session_state:
+            st.session_state.generated_report = ""
+        if "report_saved_to_history" in st.session_state:
+            st.session_state.report_saved_to_history = False
+        clear_chat_history("report_chat")
+    elif module_name == "周报助手":
+        if "generated_weekly_report" in st.session_state:
+            st.session_state.generated_weekly_report = ""
+        if "weekly_saved_to_history" in st.session_state:
+            st.session_state.weekly_saved_to_history = False
+        clear_chat_history("weekly_chat")
+    elif module_name == "白皮书助手":
+        if "generated_feature_desc" in st.session_state:
+            st.session_state.generated_feature_desc = ""
+        if "whitepaper_saved_to_history" in st.session_state:
+            st.session_state.whitepaper_saved_to_history = False
+        clear_chat_history("whitepaper_chat")
+    elif module_name == "游戏策划(lina)":
+        st.session_state.lina_chat_history = []
+        st.session_state.lina_is_processing = False
+    elif module_name == "表格处理助手":
+        st.session_state.table_dataframes = {}
+        st.session_state.table_selected_dfs = []
+        st.session_state.table_result_df = None
+        st.session_state.table_is_processing = False
+        st.session_state.table_uploaded_files_info = {}
+    elif module_name == "思路引导助手 (linmo)":
+        st.session_state.linmo_chat_history = []
+        st.session_state.linmo_is_processing = False
+        st.session_state.linmo_input_key_counter = st.session_state.get("linmo_input_key_counter", 0) + 1
+    elif module_name == "PUBGM WoW 玩法评审":
+        st.session_state.wow_review_result = ""
+        st.session_state.wow_is_processing = False
+        st.session_state.wow_uploaded_video = None
+
 def build_chat_context(chat_key: str, system_prompt: str, max_history: int = 10) -> str:
     """
     构建包含对话历史的上下文Prompt
@@ -530,18 +621,17 @@ def render_chat_interface(chat_key: str, system_prompt: str, container,
     init_chat_history(chat_key)
     history = get_chat_history(chat_key)
     
-    # 显示对话历史
+    # 显示对话历史 - 使用 ChatGPT 风格的对话气泡
     if history:
         with container:
             st.markdown("#### 💬 对话历史")
             for i, msg in enumerate(history):
                 if msg["role"] == "user":
-                    st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
-                    st.info(msg["content"])
+                    with st.chat_message("user"):
+                        st.markdown(msg["content"])
                 else:
-                    st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
-                    st.markdown(msg["content"])
-            st.markdown("---")
+                    with st.chat_message("assistant", avatar="🤖"):
+                        st.markdown(msg["content"])
     
     # 用于控制对话输入的状态
     chat_input_key = f"{chat_key}_input"
@@ -550,37 +640,22 @@ def render_chat_interface(chat_key: str, system_prompt: str, container,
     if chat_processing_key not in st.session_state:
         st.session_state[chat_processing_key] = False
     
-    # 对话输入区域
-    col_input, col_btn, col_clear = container.columns([6, 1, 1])
+    # 对话输入区域 - 使用 chat_input
+    chat_input_value = container.chat_input(
+        placeholder=placeholder,
+        key=chat_input_key
+    )
     
-    with col_input:
-        user_message = st.text_input(
-            "继续对话",
-            placeholder=placeholder,
-            key=chat_input_key,
-            label_visibility="collapsed",
-            on_change=lambda: st.session_state.update({f"{chat_key}_enter_pressed": True})
-        )
+    # 清空按钮
+    if container.button("🗑️ 清空对话历史", key=f"{chat_key}_clear", use_container_width=False):
+        clear_chat_history(chat_key)
+        st.rerun()
     
-    # 检测是否按下 Enter 键（text_input 值变化时触发）
-    enter_pressed = st.session_state.get(f"{chat_key}_enter_pressed", False)
-    if enter_pressed:
-        st.session_state[f"{chat_key}_enter_pressed"] = False
-    
-    with col_btn:
-        send_clicked = st.button("发送", key=f"{chat_key}_send", type="primary", use_container_width=True)
-    
-    with col_clear:
-        if st.button("清空", key=f"{chat_key}_clear", use_container_width=True):
-            clear_chat_history(chat_key)
-            st.rerun()
-    
-    # Enter 键或点击发送按钮都可以触发
-    should_send = (send_clicked or enter_pressed) and user_message.strip()
-    
-    return should_send, user_message, chat_processing_key
+    # 处理用户输入
+    if chat_input_value and chat_input_value.strip() and not st.session_state[chat_processing_key]:
+        pass  # 实际处理逻辑在各模块中实现
 
-def process_chat_message(chat_key: str, user_message: str, system_prompt: str, 
+def process_chat_message(chat_key: str, user_message: str, system_prompt: str,
                          function_context: str, output_container):
     """
     处理用户的对话消息并生成回复
@@ -802,6 +877,9 @@ def render_history_sidebar():
 
 # AI自检的System Prompt
 SELF_CHECK_SYSTEM_PROMPT = """你是资深游戏策划"酸奶"，正在对策划案进行复检清单检查。
+
+【回复语言】
+- 请始终使用中文进行回答和输出
 
 请根据以下10项复检清单，逐一检查策划案的完整性和规范性：
 
@@ -2386,16 +2464,38 @@ def main():
             
             st.markdown("---")
     
+    # 初始化功能选择的session state
+    if "selected_function" not in st.session_state:
+        st.session_state.selected_function = "生成策划案"
+    
+    # 功能选项列表
+    function_options = ["生成策划案", "脑图生成策划案", "优化策划案", "汇报助手", "周报助手", "白皮书助手", "游戏策划(lina)", "表格处理助手", "思路引导助手 (linmo)", "PUBGM WoW 玩法评审"]
+    
+    # 获取当前选中的索引
+    current_index = function_options.index(st.session_state.selected_function) if st.session_state.selected_function in function_options else 0
+    
     # 功能选择
     function_mode = st.selectbox(
         "🔧 功能选择",
-options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报助手", "周报助手", "白皮书助手", "游戏策划(lina)", "表格处理助手"],
-        help="选择要使用的功能"
+        options=function_options,
+        index=current_index,
+        help="选择要使用的功能",
+        key="function_selectbox"
     )
+    
+    # 更新session state
+    st.session_state.selected_function = function_mode
     
     # 根据功能模式显示不同的输入界面
     if function_mode == "生成策划案":
-        st.markdown("### 📝 生成新策划案")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 📝 生成新策划案")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_generate_session", use_container_width=True):
+                clear_module_session("生成策划案")
+                st.rerun()
         st.markdown("请输入功能描述，AI将为您生成完整的策划案。")
         
         user_input = st.text_area(
@@ -2657,35 +2757,30 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
             chat_key = "generate_prd_chat"
             init_chat_history(chat_key)
             
-            # 显示对话历史
+            # 显示对话历史 - 使用 ChatGPT 风格的对话气泡
             chat_history = get_chat_history(chat_key)
             if chat_history:
                 for msg in chat_history:
                     if msg["role"] == "user":
-                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
-                        st.info(msg["content"])
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
                     else:
-                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
-                        st.markdown(msg["content"])
+                        with st.chat_message("assistant", avatar="📝"):
+                            st.markdown(msg["content"])
             
-            # 对话输入
-            chat_col1, chat_col2, chat_col3 = st.columns([6, 1, 1])
-            with chat_col1:
-                chat_input = st.text_input(
-                    "追问或修改要求",
-                    placeholder="例如：请详细说明第3章的验收标准...",
-                    key="generate_chat_input",
-                    label_visibility="collapsed"
-                )
-            with chat_col2:
-                chat_send = st.button("发送", key="generate_chat_send", type="primary", use_container_width=True)
-            with chat_col3:
-                if st.button("清空", key="generate_chat_clear", use_container_width=True):
-                    clear_chat_history(chat_key)
-                    st.rerun()
+            # 对话输入 - 使用 chat_input
+            chat_input = st.chat_input(
+                placeholder="例如：请详细说明第3章的验收标准...",
+                key="generate_chat_input"
+            )
+            
+            # 清空按钮放在单独一行
+            if st.button("🗑️ 清空对话历史", key="generate_chat_clear", use_container_width=False):
+                clear_chat_history(chat_key)
+                st.rerun()
             
             # 处理对话
-            if chat_send and chat_input.strip():
+            if chat_input and chat_input.strip():
                 add_chat_message(chat_key, "user", chat_input)
                 
                 # 构建上下文
@@ -2719,8 +2814,15 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
                         st.rerun()
     
     elif function_mode == "脑图生成策划案":
-        st.markdown("### 🧠 脑图生成策划案")
-        st.markdown("上传思维脑图图片，AI将识别结构并生成完整的策划案。")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 🧠 脑图生成策划案")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_mindmap_session", use_container_width=True):
+                clear_module_session("脑图生成策划案")
+                st.rerun()
+        st.markdown("上传思维脑图图片或输入Mermaid代码，AI将识别结构并生成完整的策划案。")
         
         # 初始化脑图相关的session state
         if "mindmap_parsed_structure" not in st.session_state:
@@ -2731,32 +2833,78 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
             st.session_state.mindmap_image_data = None
         if "mindmap_saved" not in st.session_state:
             st.session_state.mindmap_saved = False
+        if "mindmap_mermaid_code" not in st.session_state:
+            st.session_state.mindmap_mermaid_code = ""
+        if "mindmap_input_mode" not in st.session_state:
+            st.session_state.mindmap_input_mode = "图片上传"
         
-        # 文件上传区域
-        uploaded_mindmap = st.file_uploader(
-            "📤 上传思维脑图",
-            type=["jpg", "jpeg", "png", "pdf"],
-            help="支持 JPG、PNG 格式的图片或 PDF 文件",
-            key="mindmap_uploader"
+        # 检查是否有从linmo模块传入的mermaid代码
+        if "linmo_to_mindmap_mermaid" in st.session_state and st.session_state.linmo_to_mindmap_mermaid:
+            st.session_state.mindmap_mermaid_code = st.session_state.linmo_to_mindmap_mermaid
+            st.session_state.mindmap_input_mode = "Mermaid代码"
+            st.session_state.linmo_to_mindmap_mermaid = ""  # 清空传入数据
+            st.success("✅ 已从思路引导助手导入Mermaid代码！")
+        
+        # 输入模式选择
+        input_mode = st.radio(
+            "选择输入方式",
+            ["图片上传", "Mermaid代码"],
+            index=0 if st.session_state.mindmap_input_mode == "图片上传" else 1,
+            horizontal=True,
+            key="mindmap_input_mode_radio"
         )
+        st.session_state.mindmap_input_mode = input_mode
         
-        # 显示上传的图片预览
-        if uploaded_mindmap:
-            file_type = uploaded_mindmap.type
-            file_data = uploaded_mindmap.read()
+        st.markdown("---")
+        
+        if input_mode == "图片上传":
+            # 文件上传区域
+            uploaded_mindmap = st.file_uploader(
+                "📤 上传思维脑图",
+                type=["jpg", "jpeg", "png", "pdf"],
+                help="支持 JPG、PNG 格式的图片或 PDF 文件",
+                key="mindmap_uploader"
+            )
             
-            # 图片预览
-            if file_type in ["image/jpeg", "image/png"]:
-                st.image(file_data, caption="上传的思维脑图", use_container_width=True)
-            elif file_type == "application/pdf":
-                st.info("📄 已上传 PDF 文件，AI将尝试解析其中的思维脑图内容")
+            # 显示上传的图片预览
+            if uploaded_mindmap:
+                file_type = uploaded_mindmap.type
+                file_data = uploaded_mindmap.read()
+                
+                # 图片预览
+                if file_type in ["image/jpeg", "image/png"]:
+                    st.image(file_data, caption="上传的思维脑图", use_container_width=True)
+                elif file_type == "application/pdf":
+                    st.info("📄 已上传 PDF 文件，AI将尝试解析其中的思维脑图内容")
+                
+                # 保存图片数据到session state
+                st.session_state.mindmap_image_data = {
+                    "data": file_data,
+                    "mime_type": file_type,
+                    "name": uploaded_mindmap.name
+                }
+        else:
+            # Mermaid代码输入区域
+            st.markdown("#### 📝 输入Mermaid代码")
+            st.markdown("*支持从思路引导助手生成的Mermaid思维导图代码*")
             
-            # 保存图片数据到session state
-            st.session_state.mindmap_image_data = {
-                "data": file_data,
-                "mime_type": file_type,
-                "name": uploaded_mindmap.name
-            }
+            mermaid_code = st.text_area(
+                "Mermaid代码",
+                value=st.session_state.mindmap_mermaid_code,
+                height=250,
+                placeholder="""请输入Mermaid格式的思维导图代码，例如：
+graph LR
+    A[核心功能] --> B(子功能1)
+    A --> C(子功能2)
+    B --> B1[具体细节]
+    C --> C1[具体细节]""",
+                key="mindmap_mermaid_input"
+            )
+            st.session_state.mindmap_mermaid_code = mermaid_code
+            
+            # 显示Mermaid代码预览提示
+            if mermaid_code.strip():
+                st.info("💡 提示：您可以将此代码复制到 [Mermaid Live Editor](https://mermaid-live.nodejs.cn/edit) 预览效果")
         
         # 补充说明输入
         additional_info = st.text_area(
@@ -2766,35 +2914,114 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
             key="mindmap_additional_info"
         )
         
-        # 操作按钮
-        col1, col2, col3 = st.columns([1, 1, 1])
-        
-        with col1:
-            parse_btn = st.button(
-                "🔍 解析脑图结构",
-                disabled=not st.session_state.mindmap_image_data,
-                use_container_width=True
-            )
-        
-        with col2:
-            generate_btn = st.button(
-                "📝 生成策划案",
-                disabled=not st.session_state.mindmap_parsed_structure,
-                use_container_width=True
-            )
-        
-        with col3:
-            clear_btn = st.button(
-                "🗑️ 清空重来",
-                use_container_width=True
-            )
+        # 操作按钮 - 根据输入模式调整
+        if input_mode == "图片上传":
+            col1, col2, col3 = st.columns([1, 1, 1])
+            
+            with col1:
+                parse_btn = st.button(
+                    "🔍 解析脑图结构",
+                    disabled=not st.session_state.mindmap_image_data,
+                    use_container_width=True
+                )
+            
+            with col2:
+                generate_btn = st.button(
+                    "📝 生成策划案",
+                    disabled=not st.session_state.mindmap_parsed_structure,
+                    use_container_width=True
+                )
+            
+            with col3:
+                clear_btn = st.button(
+                    "🗑️ 清空重来",
+                    use_container_width=True
+                )
+            
+            # Mermaid模式不需要解析按钮
+            mermaid_parse_btn = False
+        else:
+            col1, col2, col3 = st.columns([1, 1, 1])
+            
+            with col1:
+                mermaid_parse_btn = st.button(
+                    "🔍 解析Mermaid结构",
+                    disabled=not st.session_state.mindmap_mermaid_code.strip(),
+                    use_container_width=True
+                )
+                parse_btn = False
+            
+            with col2:
+                generate_btn = st.button(
+                    "📝 生成策划案",
+                    disabled=not st.session_state.mindmap_parsed_structure,
+                    use_container_width=True
+                )
+            
+            with col3:
+                clear_btn = st.button(
+                    "🗑️ 清空重来",
+                    use_container_width=True
+                )
         
         if clear_btn:
             st.session_state.mindmap_parsed_structure = None
             st.session_state.mindmap_generated_prd = None
             st.session_state.mindmap_image_data = None
+            st.session_state.mindmap_mermaid_code = ""
             st.session_state.mindmap_saved = False
             st.rerun()
+        
+        # 解析Mermaid代码结构
+        if mermaid_parse_btn and st.session_state.mindmap_mermaid_code.strip():
+            st.markdown("---")
+            st.markdown("#### 🔄 正在解析Mermaid代码结构...")
+            
+            # 创建显示容器
+            thinking_container = st.expander("💭 AI思考过程", expanded=False)
+            status_container = st.empty()
+            result_container = st.empty()
+            
+            mermaid_parse_prompt = f"""请分析以下Mermaid格式的思维导图代码，将其转换为结构化的文本格式，便于生成策划案。
+
+【Mermaid代码】
+```mermaid
+{st.session_state.mindmap_mermaid_code}
+```
+
+请识别出：
+1. 核心主题/功能
+2. 各个分支节点及其层级关系
+3. 节点之间的逻辑关系
+
+输出格式要求：使用层级缩进的文本形式展示结构。"""
+
+            if additional_info:
+                mermaid_parse_prompt += f"\n\n补充背景信息：{additional_info}"
+            
+            # 流式解析
+            full_response = ""
+            thinking_text = ""
+            
+            for chunk_data in call_gemini_stream(mermaid_parse_prompt, MINDMAP_PARSE_SYSTEM_PROMPT):
+                chunk_type = chunk_data.get("type", "text")
+                chunk_content = chunk_data.get("content", "")
+                
+                if chunk_type == "text":
+                    full_response += chunk_content
+                    result_container.markdown(full_response + " ▌")
+                elif chunk_type == "thinking":
+                    thinking_text += chunk_content
+                    with thinking_container:
+                        st.markdown(thinking_text)
+                elif chunk_type == "error":
+                    status_container.error(f"❌ 解析失败: {chunk_content}")
+            
+            if full_response:
+                result_container.markdown(full_response)
+                st.session_state.mindmap_parsed_structure = full_response
+                status_container.success('✅ Mermaid结构解析完成！请点击"生成策划案"按钮继续。')
+                st.rerun()
         
         # 解析脑图结构
         if parse_btn and st.session_state.mindmap_image_data:
@@ -2958,34 +3185,29 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
             chat_key = "mindmap_prd_chat"
             init_chat_history(chat_key)
             
-            # 显示对话历史
+            # 显示对话历史 - 使用 ChatGPT 风格的对话气泡
             chat_history = get_chat_history(chat_key)
             if chat_history:
                 for msg in chat_history:
                     if msg["role"] == "user":
-                        st.markdown(f"**🧑 你：** {msg['content']}")
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
                     else:
-                        st.markdown(f"**🤖 AI：** {msg['content']}")
-                st.markdown("---")
+                        with st.chat_message("assistant", avatar="🗺️"):
+                            st.markdown(msg["content"])
             
-            # 对话输入
-            chat_input = st.text_input(
-                "继续提问或要求修改",
+            # 对话输入 - 使用 chat_input
+            chat_input = st.chat_input(
                 placeholder="例如：请补充一下技术实现方案...",
                 key="mindmap_chat_input"
             )
             
-            chat_col1, chat_col2 = st.columns([1, 4])
-            with chat_col1:
-                send_chat = st.button("发送", key="mindmap_send_chat", use_container_width=True)
-            with chat_col2:
-                clear_chat = st.button("清空对话", key="mindmap_clear_chat")
-            
-            if clear_chat:
+            # 清空按钮
+            if st.button("🗑️ 清空对话历史", key="mindmap_clear_chat", use_container_width=False):
                 clear_chat_history(chat_key)
                 st.rerun()
             
-            if send_chat and chat_input:
+            if chat_input and chat_input.strip():
                 add_chat_message(chat_key, "user", chat_input)
                 
                 # 构建上下文
@@ -3017,7 +3239,14 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
                     st.rerun()
     
     elif function_mode == "优化策划案":
-        st.markdown("### 🔄 优化现有策划案")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 🔄 优化现有策划案")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_optimize_session", use_container_width=True):
+                clear_module_session("优化策划案")
+                st.rerun()
         st.markdown("请输入原策划案和修改意见，AI将通过多轮迭代进行优化。")
         
         col1, col2 = st.columns([3, 1])
@@ -3333,35 +3562,30 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
             chat_key = "optimize_prd_chat"
             init_chat_history(chat_key)
             
-            # 显示对话历史
+            # 显示对话历史 - 使用 ChatGPT 风格的对话气泡
             chat_history = get_chat_history(chat_key)
             if chat_history:
                 for msg in chat_history:
                     if msg["role"] == "user":
-                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
-                        st.info(msg["content"])
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
                     else:
-                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
-                        st.markdown(msg["content"])
+                        with st.chat_message("assistant", avatar="✨"):
+                            st.markdown(msg["content"])
             
-            # 对话输入
-            opt_chat_col1, opt_chat_col2, opt_chat_col3 = st.columns([6, 1, 1])
-            with opt_chat_col1:
-                opt_chat_input = st.text_input(
-                    "追问或修改要求",
-                    placeholder="例如：请补充技术依赖部分的细节...",
-                    key="optimize_chat_input",
-                    label_visibility="collapsed"
-                )
-            with opt_chat_col2:
-                opt_chat_send = st.button("发送", key="optimize_chat_send", type="primary", use_container_width=True)
-            with opt_chat_col3:
-                if st.button("清空", key="optimize_chat_clear", use_container_width=True):
-                    clear_chat_history(chat_key)
-                    st.rerun()
+            # 对话输入 - 使用 chat_input
+            opt_chat_input = st.chat_input(
+                placeholder="例如：请补充技术依赖部分的细节...",
+                key="optimize_chat_input"
+            )
+            
+            # 清空按钮
+            if st.button("🗑️ 清空对话历史", key="optimize_chat_clear", use_container_width=False):
+                clear_chat_history(chat_key)
+                st.rerun()
             
             # 处理对话
-            if opt_chat_send and opt_chat_input.strip():
+            if opt_chat_input and opt_chat_input.strip():
                 add_chat_message(chat_key, "user", opt_chat_input)
                 
                 # 构建上下文
@@ -3396,7 +3620,14 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
     
     # ========== 汇报助手功能 ==========
     elif function_mode == "汇报助手":
-        st.markdown("### 📊 汇报助手")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 📊 汇报助手")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_report_session", use_container_width=True):
+                clear_module_session("汇报助手")
+                st.rerun()
         st.markdown("将碎片化的工作信息转化为结构化的汇报文案，用于向领导同步工作事项。")
         
         # 三个独立的输入框
@@ -3565,35 +3796,30 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
             chat_key = "report_chat"
             init_chat_history(chat_key)
             
-            # 显示对话历史
+            # 显示对话历史 - 使用 ChatGPT 风格的对话气泡
             chat_history = get_chat_history(chat_key)
             if chat_history:
                 for msg in chat_history:
                     if msg["role"] == "user":
-                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
-                        st.info(msg["content"])
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
                     else:
-                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
-                        st.markdown(msg["content"])
+                        with st.chat_message("assistant", avatar="📊"):
+                            st.markdown(msg["content"])
             
-            # 对话输入
-            report_chat_col1, report_chat_col2, report_chat_col3 = st.columns([6, 1, 1])
-            with report_chat_col1:
-                report_chat_input = st.text_input(
-                    "追问或修改要求",
-                    placeholder="例如：请把解决方案写得更详细一些...",
-                    key="report_chat_input",
-                    label_visibility="collapsed"
-                )
-            with report_chat_col2:
-                report_chat_send = st.button("发送", key="report_chat_send", type="primary", use_container_width=True)
-            with report_chat_col3:
-                if st.button("清空", key="report_chat_clear", use_container_width=True):
-                    clear_chat_history(chat_key)
-                    st.rerun()
+            # 对话输入 - 使用 chat_input
+            report_chat_input = st.chat_input(
+                placeholder="例如：请把解决方案写得更详细一些...",
+                key="report_chat_input"
+            )
+            
+            # 清空按钮
+            if st.button("🗑️ 清空对话历史", key="report_chat_clear", use_container_width=False):
+                clear_chat_history(chat_key)
+                st.rerun()
             
             # 处理对话
-            if report_chat_send and report_chat_input.strip():
+            if report_chat_input and report_chat_input.strip():
                 add_chat_message(chat_key, "user", report_chat_input)
                 
                 # 构建上下文
@@ -3628,7 +3854,14 @@ options=["生成策划案", "脑图生成策划案", "优化策划案", "汇报�
     
     # ========== 周报助手功能 ==========
     elif function_mode == "周报助手":
-        st.markdown("### 📅 周报助手")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 📅 周报助手")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_weekly_session", use_container_width=True):
+                clear_module_session("周报助手")
+                st.rerun()
         st.markdown("将零散的日报/工作记录汇总、提炼为逻辑清晰、重点突出的专业周报。")
         
         # 大的多行文本框
@@ -3780,35 +4013,30 @@ Input Data (本周日报/工作记录):
             chat_key = "weekly_chat"
             init_chat_history(chat_key)
             
-            # 显示对话历史
+            # 显示对话历史 - 使用 ChatGPT 风格的对话气泡
             chat_history = get_chat_history(chat_key)
             if chat_history:
                 for msg in chat_history:
                     if msg["role"] == "user":
-                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
-                        st.info(msg["content"])
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
                     else:
-                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
-                        st.markdown(msg["content"])
+                        with st.chat_message("assistant", avatar="📅"):
+                            st.markdown(msg["content"])
             
-            # 对话输入
-            weekly_chat_col1, weekly_chat_col2, weekly_chat_col3 = st.columns([6, 1, 1])
-            with weekly_chat_col1:
-                weekly_chat_input = st.text_input(
-                    "追问或修改要求",
-                    placeholder="例如：请补充数据分析部分的内容...",
-                    key="weekly_chat_input",
-                    label_visibility="collapsed"
-                )
-            with weekly_chat_col2:
-                weekly_chat_send = st.button("发送", key="weekly_chat_send", type="primary", use_container_width=True)
-            with weekly_chat_col3:
-                if st.button("清空", key="weekly_chat_clear", use_container_width=True):
-                    clear_chat_history(chat_key)
-                    st.rerun()
+            # 对话输入 - 使用 chat_input
+            weekly_chat_input = st.chat_input(
+                placeholder="例如：请补充数据分析部分的内容...",
+                key="weekly_chat_input"
+            )
+            
+            # 清空按钮
+            if st.button("🗑️ 清空对话历史", key="weekly_chat_clear", use_container_width=False):
+                clear_chat_history(chat_key)
+                st.rerun()
             
             # 处理对话
-            if weekly_chat_send and weekly_chat_input.strip():
+            if weekly_chat_input and weekly_chat_input.strip():
                 add_chat_message(chat_key, "user", weekly_chat_input)
                 
                 # 构建上下文
@@ -3843,7 +4071,14 @@ Input Data (本周日报/工作记录):
     
     # ========== 白皮书助手功能 ==========
     elif function_mode == "白皮书助手":
-        st.markdown("### 📖 白皮书助手")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 📖 白皮书助手")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_whitepaper_session", use_container_width=True):
+                clear_module_session("白皮书助手")
+                st.rerun()
         st.markdown("将简短的功能关键词扩写为标准的PUBGM WoW模式版本功能陈述。")
         
         # 单行文本框
@@ -3981,35 +4216,30 @@ Input Data (本周日报/工作记录):
             chat_key = "whitepaper_chat"
             init_chat_history(chat_key)
             
-            # 显示对话历史
+            # 显示对话历史 - 使用 ChatGPT 风格的对话气泡
             chat_history = get_chat_history(chat_key)
             if chat_history:
                 for msg in chat_history:
                     if msg["role"] == "user":
-                        st.markdown(f"**🧑 用户** _{msg['timestamp']}_")
-                        st.info(msg["content"])
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
                     else:
-                        st.markdown(f"**🤖 助手** _{msg['timestamp']}_")
-                        st.markdown(msg["content"])
+                        with st.chat_message("assistant", avatar="📖"):
+                            st.markdown(msg["content"])
             
-            # 对话输入
-            wp_chat_col1, wp_chat_col2, wp_chat_col3 = st.columns([6, 1, 1])
-            with wp_chat_col1:
-                wp_chat_input = st.text_input(
-                    "追问或修改要求",
-                    placeholder="例如：请再生成一个关于武装AI的功能描述...",
-                    key="whitepaper_chat_input",
-                    label_visibility="collapsed"
-                )
-            with wp_chat_col2:
-                wp_chat_send = st.button("发送", key="whitepaper_chat_send", type="primary", use_container_width=True)
-            with wp_chat_col3:
-                if st.button("清空", key="whitepaper_chat_clear", use_container_width=True):
-                    clear_chat_history(chat_key)
-                    st.rerun()
+            # 对话输入 - 使用 chat_input
+            wp_chat_input = st.chat_input(
+                placeholder="例如：请再生成一个关于武装AI的功能描述...",
+                key="whitepaper_chat_input"
+            )
+            
+            # 清空按钮
+            if st.button("🗑️ 清空对话历史", key="whitepaper_chat_clear", use_container_width=False):
+                clear_chat_history(chat_key)
+                st.rerun()
             
             # 处理对话
-            if wp_chat_send and wp_chat_input.strip():
+            if wp_chat_input and wp_chat_input.strip():
                 add_chat_message(chat_key, "user", wp_chat_input)
                 
                 # 构建上下文
@@ -4044,11 +4274,21 @@ Input Data (本周日报/工作记录):
     
     # ========== 精英策划案(lina版) 模块 ==========
     elif function_mode == "游戏策划(lina)":
-        st.markdown("### 🎯 游戏策划(lina)")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 🎯 游戏策划(lina)")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_lina_session", use_container_width=True):
+                clear_module_session("游戏策划(lina)")
+                st.rerun()
         st.markdown("与资深游戏策划专家进行多轮讨论，将需求提炼为结构化的功能点列表。")
         
         # Lina模块的System Prompt
         LINA_SYSTEM_PROMPT = """#  step1：精英策划案讨论
+
+## 回复语言
+请始终使用中文进行回答和输出。
 
 ## 角色定位与核心人设
 
@@ -4350,7 +4590,7 @@ Input Data (本周日报/工作记录):
             
             # 清空对话按钮
             if st.button("🗑️ 清空对话/重新开始", key="lina_clear_chat", use_container_width=True):
-                st.session_state.lina_chat_history = []
+                clear_module_session("游戏策划(lina)")
                 st.rerun()
         
         # 计算当前轮次（用户消息数）
@@ -4378,45 +4618,15 @@ Input Data (本周日报/工作记录):
         if max_rounds_reached:
             st.warning(f'⚠️ 对话轮次已达上限（{st.session_state.lina_max_rounds}轮），请点击侧边栏的"清空对话/重新开始"按钮重新开始。')
         
-        # 输入区
-        st.markdown("---")
+        # 输入区 - 使用 chat_input，只有按下 Enter 键才会发送
+        lina_user_input = st.chat_input(
+            placeholder="例如：我想设计一个PUBG Mobile的好友推荐系统...",
+            disabled=max_rounds_reached or st.session_state.lina_is_processing,
+            key="lina_chat_input"
+        )
         
-        # 初始化Enter键状态
-        if "lina_enter_pressed" not in st.session_state:
-            st.session_state.lina_enter_pressed = False
-        
-        # 用于清空输入框的计数器（每次发送后增加，改变key强制重建组件）
-        if "lina_input_key_counter" not in st.session_state:
-            st.session_state.lina_input_key_counter = 0
-        
-        # 使用text_input + on_change 来支持Enter键发送
-        col_input, col_send = st.columns([6, 1])
-        with col_input:
-            lina_user_input = st.text_input(
-                "输入您的需求或想法",
-                placeholder="例如：我想设计一个PUBG Mobile的好友推荐系统...",
-                key=f"lina_chat_input_{st.session_state.lina_input_key_counter}",
-                disabled=max_rounds_reached or st.session_state.lina_is_processing,
-                label_visibility="collapsed",
-                on_change=lambda: st.session_state.update({"lina_enter_pressed": True})
-            )
-        
-        # 检测是否按下 Enter 键
-        enter_pressed = st.session_state.get("lina_enter_pressed", False)
-        if enter_pressed:
-            st.session_state.lina_enter_pressed = False
-        
-        with col_send:
-            send_button = st.button(
-                "发送",
-                key="lina_send_btn",
-                type="primary",
-                use_container_width=True,
-                disabled=max_rounds_reached or st.session_state.lina_is_processing
-            )
-        
-        # Enter 键或点击发送按钮都可以触发
-        should_send = (send_button or enter_pressed) and lina_user_input.strip() and not max_rounds_reached
+        # chat_input 返回值不为 None 时表示用户按下了 Enter 键发送
+        should_send = lina_user_input is not None and lina_user_input.strip() and not max_rounds_reached
         
         # 处理用户输入
         if should_send:
@@ -4475,17 +4685,24 @@ Input Data (本周日报/工作记录):
                 })
             
             st.session_state.lina_is_processing = False
-            # 清空输入框（通过增加计数器改变key，强制重建组件）
-            st.session_state.lina_input_key_counter += 1
             st.rerun()
     
     # ========== 表格处理助手模块 ==========
     elif function_mode == "表格处理助手":
-        st.markdown("### 📊 表格处理助手")
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 📊 表格处理助手")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_table_session", use_container_width=True):
+                clear_module_session("表格处理助手")
+                st.rerun()
         st.markdown("上传Excel表格，描述处理逻辑，AI将自动生成代码并执行处理。")
         
-        # 表格处理助手的System Prompt
-        TABLE_ASSISTANT_SYSTEM_PROMPT = """Role: 你是一位精通 Python Pandas 库的数据处理专家。
+        # 表格处理助手的System Prompt（单表格版本）
+        TABLE_ASSISTANT_SYSTEM_PROMPT_SINGLE = """Role: 你是一位精通 Python Pandas 库的数据处理专家。
+
+回复语言: 请始终使用中文进行回答和输出。
 
 Task: 你的任务是根据用户提供的【数据列名结构】、【处理逻辑】和【输出要求】，编写一段可执行的 Python 代码来处理数据。
 
@@ -4510,40 +4727,124 @@ Example Output:
 # 假设用户要求筛选A列大于10
 result_df = df[df['A'] > 10].copy()"""
         
+        # 表格处理助手的System Prompt（多表格版本）
+        TABLE_ASSISTANT_SYSTEM_PROMPT_MULTI = """Role: 你是一位精通 Python Pandas 库的数据处理专家。
+
+回复语言: 请始终使用中文进行回答和输出。
+
+Task: 你的任务是根据用户提供的【多个数据表结构】、【处理逻辑】和【输出要求】，编写一段可执行的 Python 代码来处理数据。
+
+Context (运行环境):
+1. 这是一个沙盒环境，已经预置了多个 Pandas DataFrame 变量，变量名为 df_1, df_2, df_3... 分别对应用户上传的多个表格数据。
+2. 你需要编写处理这些 DataFrame 的逻辑代码，可能涉及合并、关联、对比等操作。
+3. **关键约束**：处理完成后的最终结果 DataFrame 必须赋值给变量名 `result_df`。
+
+Input Data:
+{tables_info}
+- 处理逻辑: {processing_logic}
+- 输出要求: {output_requirements}
+
+Output Rules (Strict):
+1. **只输出 Python 代码**。不要包含 ```python ... ``` 标记，不要包含任何解释性文字，不要包含 print 语句。
+2. 确保代码可以直接在 `exec()` 函数中运行。
+3. 必须确保最终结果存储在 `result_df` 变量中。
+4. 如果需要导入 pandas，请使用 `import pandas as pd`（虽然环境通常已预置，但为了保险）。
+5. 不要读取文件（文件已在对应的 df_N 变量中），不要保存文件（系统会处理保存）。
+6. 使用正确的变量名引用各个表格（df_1, df_2, df_3...）。
+
+Example Output:
+# 假设用户要求将df_1和df_2按照ID列合并
+result_df = pd.merge(df_1, df_2, on='ID', how='inner')"""
+        
         # 初始化Session State
-        if "table_raw_df" not in st.session_state:
-            st.session_state.table_raw_df = None
+        if "table_dataframes" not in st.session_state:
+            st.session_state.table_dataframes = {}  # {"文件名_sheet名": df}
+        if "table_selected_dfs" not in st.session_state:
+            st.session_state.table_selected_dfs = []  # 用户选择的df列表
         if "table_result_df" not in st.session_state:
             st.session_state.table_result_df = None
         if "table_is_processing" not in st.session_state:
             st.session_state.table_is_processing = False
+        if "table_uploaded_files_info" not in st.session_state:
+            st.session_state.table_uploaded_files_info = {}  # {文件名: [sheet列表]}
         
         # 文件上传区
         st.markdown("#### 📁 文件上传")
-        uploaded_file = st.file_uploader(
-            "上传Excel表格",
-            type=['xlsx', 'xls'],
+        uploaded_files = st.file_uploader(
+            "上传表格文件（支持多文件）",
+            type=['xlsx', 'xls', 'csv'],
             key="table_file_uploader",
-            help="支持 .xlsx 和 .xls 格式的Excel文件"
+            help="支持 .xlsx、.xls 格式的Excel文件和 .csv 格式的CSV文件，可同时上传多个文件",
+            accept_multiple_files=True
         )
         
+        import pandas as pd
+        
         # 读取上传的文件
-        if uploaded_file is not None:
-            try:
-                import pandas as pd
-                st.session_state.table_raw_df = pd.read_excel(uploaded_file)
-                st.success(f"✅ 文件上传成功！共 {len(st.session_state.table_raw_df)} 行，{len(st.session_state.table_raw_df.columns)} 列")
-                
-                # 显示列名信息
-                with st.expander("📋 查看数据列名", expanded=True):
-                    st.write("**列名列表：**", ", ".join(st.session_state.table_raw_df.columns.tolist()))
-                
-                # 显示数据预览
-                with st.expander("👁️ 数据预览（前5行）"):
-                    st.dataframe(st.session_state.table_raw_df.head(5))
-            except Exception as e:
-                st.error(f"❌ 文件读取失败: {e}")
-                st.session_state.table_raw_df = None
+        if uploaded_files:
+            new_dataframes = {}
+            new_files_info = {}
+            
+            for uploaded_file in uploaded_files:
+                file_name = uploaded_file.name
+                file_ext = file_name.lower().split('.')[-1]
+                try:
+                    if file_ext == 'csv':
+                        # CSV文件只有一个数据表
+                        df = pd.read_csv(uploaded_file)
+                        df_key = file_name
+                        new_dataframes[df_key] = df
+                        new_files_info[file_name] = ['CSV数据']
+                    else:
+                        # Excel文件可能有多个sheet
+                        excel_file = pd.ExcelFile(uploaded_file)
+                        sheet_names = excel_file.sheet_names
+                        new_files_info[file_name] = sheet_names
+                        
+                        # 读取每个sheet
+                        for sheet_name in sheet_names:
+                            df_key = f"{file_name} - {sheet_name}"
+                            df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                            new_dataframes[df_key] = df
+                    
+                except Exception as e:
+                    st.error(f"❌ 文件 {file_name} 读取失败: {e}")
+            
+            # 更新session state
+            st.session_state.table_dataframes = new_dataframes
+            st.session_state.table_uploaded_files_info = new_files_info
+            
+            if new_dataframes:
+                st.success(f"✅ 成功读取 {len(uploaded_files)} 个文件，共 {len(new_dataframes)} 个数据表")
+        else:
+            # 清空数据
+            st.session_state.table_dataframes = {}
+            st.session_state.table_uploaded_files_info = {}
+            st.session_state.table_selected_dfs = []
+        
+        # 显示已上传的表格信息和选择器
+        if st.session_state.table_dataframes:
+            st.markdown("#### 📋 选择要处理的数据表")
+            
+            # 多选框选择要使用的表格
+            available_tables = list(st.session_state.table_dataframes.keys())
+            selected_tables = st.multiselect(
+                "选择要处理的数据表（可多选）",
+                options=available_tables,
+                default=available_tables[:1] if available_tables else [],
+                key="table_selector",
+                help="选择一个或多个数据表进行处理。多个表格时，AI可以进行合并、关联等操作。"
+            )
+            st.session_state.table_selected_dfs = selected_tables
+            
+            # 显示选中表格的信息
+            if selected_tables:
+                for idx, table_key in enumerate(selected_tables, 1):
+                    df = st.session_state.table_dataframes[table_key]
+                    with st.expander(f"📊 表格{idx}: {table_key} ({len(df)}行, {len(df.columns)}列)", expanded=(idx==1)):
+                        st.write(f"**变量名：** `df_{idx}`")
+                        st.write(f"**列名列表：** {', '.join(df.columns.tolist())}")
+                        st.dataframe(df.head(5))
         
         # 需求输入区
         st.markdown("#### ✏️ 处理需求")
@@ -4563,31 +4864,57 @@ result_df = df[df['A'] > 10].copy()"""
         
         # 执行按钮
         col1, col2 = st.columns([1, 4])
+        has_selected_tables = len(st.session_state.table_selected_dfs) > 0
         with col1:
             process_btn = st.button(
                 "🚀 开始处理并生成结果",
-                disabled=st.session_state.table_is_processing or st.session_state.table_raw_df is None,
+                disabled=st.session_state.table_is_processing or not has_selected_tables,
                 type="primary"
             )
         
         # 处理逻辑
-        if process_btn and st.session_state.table_raw_df is not None:
+        if process_btn and has_selected_tables:
             if not processing_logic.strip():
                 st.warning("⚠️ 请输入数据处理逻辑")
             else:
                 st.session_state.table_is_processing = True
                 
-                import pandas as pd
+                selected_tables = st.session_state.table_selected_dfs
+                num_tables = len(selected_tables)
                 
-                # 获取列名
-                columns_str = ", ".join(st.session_state.table_raw_df.columns.tolist())
+                # 准备执行环境
+                local_vars = {'pd': pd}
                 
-                # 构建Prompt
-                final_prompt = TABLE_ASSISTANT_SYSTEM_PROMPT.format(
-                    columns=columns_str,
-                    processing_logic=processing_logic,
-                    output_requirements=output_requirements if output_requirements.strip() else "保留所有相关列"
-                )
+                if num_tables == 1:
+                    # 单表格模式
+                    table_key = selected_tables[0]
+                    df = st.session_state.table_dataframes[table_key]
+                    columns_str = ", ".join(df.columns.tolist())
+                    local_vars['df'] = df.copy()
+                    
+                    # 构建单表格Prompt
+                    final_prompt = TABLE_ASSISTANT_SYSTEM_PROMPT_SINGLE.format(
+                        columns=columns_str,
+                        processing_logic=processing_logic,
+                        output_requirements=output_requirements if output_requirements.strip() else "保留所有相关列"
+                    )
+                else:
+                    # 多表格模式
+                    tables_info_lines = []
+                    for idx, table_key in enumerate(selected_tables, 1):
+                        df = st.session_state.table_dataframes[table_key]
+                        local_vars[f'df_{idx}'] = df.copy()
+                        columns_str = ", ".join(df.columns.tolist())
+                        tables_info_lines.append(f"- 表格{idx} (变量名: df_{idx}, 来源: {table_key}): 列名 = [{columns_str}]")
+                    
+                    tables_info = "\n".join(tables_info_lines)
+                    
+                    # 构建多表格Prompt
+                    final_prompt = TABLE_ASSISTANT_SYSTEM_PROMPT_MULTI.format(
+                        tables_info=tables_info,
+                        processing_logic=processing_logic,
+                        output_requirements=output_requirements if output_requirements.strip() else "保留所有相关列"
+                    )
                 
                 with st.spinner("🤖 AI正在分析需求并生成代码..."):
                     try:
@@ -4601,9 +4928,6 @@ result_df = df[df['A'] > 10].copy()"""
                             # 显示生成的代码（调试用，可选）
                             with st.expander("🔍 查看生成的代码", expanded=False):
                                 st.code(code_to_run, language="python")
-                            
-                            # 准备执行环境
-                            local_vars = {'df': st.session_state.table_raw_df.copy(), 'pd': pd}
                             
                             # 执行代码
                             with st.spinner("⚙️ 正在执行数据处理..."):
@@ -4652,6 +4976,391 @@ result_df = df[df['A'] > 10].copy()"""
                 data=processed_data,
                 file_name="processed_result.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    
+    # ========== 思路引导助手 (linmo) 模块 ==========
+    elif function_mode == "思路引导助手 (linmo)":
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 🧠 思路引导助手 (Linmo)")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_linmo_session", use_container_width=True):
+                clear_module_session("思路引导助手 (linmo)")
+                st.rerun()
+        st.markdown("通过苏格拉底式提问，帮助您理清思路并生成结构化的思维导图。")
+        
+        # Mermaid在线编辑器链接
+        st.markdown("""
+        📎 **Mermaid 在线编辑器**：
+        - [Mermaid AI Dashboard](https://mermaid.ai/app/dashboard)
+        - [Mermaid Live Editor](https://mermaid-live.nodejs.cn/edit)
+        """)
+        st.markdown("---")
+        
+        # Linmo模块的System Prompt
+        LINMO_SYSTEM_PROMPT = """Role: 你是 "Linmo" (思路引导助手)，一位擅长结构化思维和苏格拉底式提问的专家。
+
+回复语言: 请始终使用中文进行回答和输出。
+
+Goal: 你的目标是帮助用户理清复杂的问题或想法，将其转化为结构清晰的思维导图。
+
+Process:
+1.  **接收输入**：用户会输入一个问题、一种困扰或一些零散的思路。
+2.  **分析与构建**：基于用户的信息，构建或更新一个思维导图结构。
+3.  **追问引导**：不要直接给出所有答案。你需要发现用户思路中的模糊点、缺失环节或逻辑跳跃，并提出 1-2 个关键的追问，引导用户深入思考。
+4.  **循环迭代**：用户回答后，你将新信息整合进思维导图，并再次展示更新后的结构，直到用户满意。
+
+Output Format (Strict):
+每次回复必须包含以下三个部分：
+
+**Part 1: 思考与反馈**
+简要回应用户的输入，说明你理解了什么，以及你为什么要更新导图的某个部分。
+
+**Part 2: 当前思维导图 (Mermaid)**
+请始终使用 Mermaid 语法展示**当前完整**的思维导图结构。
+请使用 `graph LR` (从左到右) 或 `graph TD` (从上到下) 结构。
+```mermaid
+graph LR
+    A[核心问题] --> B(分支1)
+    A --> C(分支2)
+    B --> B1(细节)
+```
+
+**Part 3: 引导追问**
+基于当前的导图，提出 1-2 个问题，引导用户补充下一层级的信息或澄清模糊点。
+(例如："关于分支B，你觉得具体的执行难点在哪里？" 或 "除了目前列出的，还有其他影响因素吗？")
+
+Termination Condition:
+当用户明确表示"没有问题了"、"结构很好了"或"生成最终结果"时：
+1. 停止追问。
+2. 输出一段总结语。
+3. 输出最终版本的 Mermaid 代码块，确保语法完美，适合复制。
+
+Tone:
+专业、耐心、引导性强、逻辑严密。"""
+        
+        # 初始化linmo模块专用的session state
+        if "linmo_chat_history" not in st.session_state:
+            st.session_state.linmo_chat_history = []
+        if "linmo_max_rounds" not in st.session_state:
+            st.session_state.linmo_max_rounds = 10
+        if "linmo_is_processing" not in st.session_state:
+            st.session_state.linmo_is_processing = False
+        if "linmo_input_key_counter" not in st.session_state:
+            st.session_state.linmo_input_key_counter = 0
+        
+        # 侧边栏设置：最大对话轮次
+        with st.sidebar:
+            st.markdown("---")
+            st.subheader("🧠 Linmo对话设置")
+            linmo_max_rounds = st.number_input(
+                "最大对话轮次限制",
+                min_value=1,
+                max_value=50,
+                value=st.session_state.linmo_max_rounds,
+                step=1,
+                help="一轮对话 = 用户发送 + AI回复",
+                key="linmo_max_rounds_input"
+            )
+            st.session_state.linmo_max_rounds = linmo_max_rounds
+            
+            # 显示当前轮次
+            current_rounds = len([m for m in st.session_state.linmo_chat_history if m["role"] == "user"])
+            st.info(f"当前轮次: {current_rounds} / {linmo_max_rounds}")
+            
+            # 清空对话按钮
+            if st.button("🗑️ 重新开始引导", key="linmo_clear_chat", use_container_width=True):
+                clear_module_session("思路引导助手 (linmo)")
+                st.rerun()
+        
+        # 计算当前轮次（用户消息数）
+        current_rounds = len([m for m in st.session_state.linmo_chat_history if m["role"] == "user"])
+        max_rounds_reached = current_rounds >= st.session_state.linmo_max_rounds
+        
+        # 聊天显示区
+        st.markdown("#### 💬 对话区域")
+        
+        # 辅助函数：从文本中提取Mermaid代码
+        def extract_mermaid_code(text):
+            """从文本中提取Mermaid代码块"""
+            import re
+            # 匹配 ```mermaid ... ``` 代码块
+            pattern = r'```mermaid\s*([\s\S]*?)```'
+            matches = re.findall(pattern, text)
+            if matches:
+                return matches[-1].strip()  # 返回最后一个Mermaid代码块
+            return None
+        
+        # 显示对话历史
+        chat_container = st.container()
+        with chat_container:
+            if not st.session_state.linmo_chat_history:
+                # 显示欢迎语
+                with st.chat_message("assistant", avatar="🧠"):
+                    st.markdown("你好，我是 **Linmo**。请告诉我你现在面临的问题或想要拆解的目标，我来帮你梳理思路。\n\n我会通过提问引导你逐步理清思路，并用思维导图的形式展示结构。")
+            else:
+                for msg in st.session_state.linmo_chat_history:
+                    if msg["role"] == "user":
+                        with st.chat_message("user"):
+                            st.markdown(msg["content"])
+                    else:
+                        with st.chat_message("assistant", avatar="🧠"):
+                            st.markdown(msg["content"])
+        
+        # 检测最后一条AI回复是否包含Mermaid代码，显示跳转按钮
+        if st.session_state.linmo_chat_history:
+            # 获取最后一条AI回复
+            ai_messages = [m for m in st.session_state.linmo_chat_history if m["role"] == "assistant"]
+            if ai_messages:
+                last_ai_message = ai_messages[-1]["content"]
+                mermaid_code = extract_mermaid_code(last_ai_message)
+                if mermaid_code:
+                    st.markdown("---")
+                    st.info("🎉 检测到思维导图已生成，您可以将其用于生成完整的策划案！")
+                    col_jump, col_copy = st.columns([1, 1])
+                    with col_jump:
+                        if st.button("🚀 跳转到「脑图生成策划案」", key="linmo_jump_to_mindmap", use_container_width=True):
+                            # 将mermaid代码存入session state，供脑图模块使用
+                            st.session_state.linmo_to_mindmap_mermaid = mermaid_code
+                            st.session_state.selected_function = "脑图生成策划案"
+                            st.rerun()
+                    with col_copy:
+                        st.markdown(f"📋 **Mermaid代码预览**（可复制）")
+                        st.code(mermaid_code, language="mermaid")
+        
+        # 轮次达到上限提示
+        if max_rounds_reached:
+            st.warning(f'⚠️ 对话轮次已达上限（{st.session_state.linmo_max_rounds}轮），请点击侧边栏的"重新开始引导"按钮重新开始。')
+        
+        # 输入区 - 使用st.chat_input，只在按Enter时触发
+        if max_rounds_reached or st.session_state.linmo_is_processing:
+            st.chat_input("对话轮次已达上限或正在处理中...", disabled=True, key="linmo_chat_disabled")
+            linmo_user_input = None
+        else:
+            linmo_user_input = st.chat_input(
+                "请输入当前面临的问题，或对当前思维导图的修改建议...",
+                key=f"linmo_chat_input_{st.session_state.linmo_input_key_counter}"
+            )
+        
+        # 处理用户输入（st.chat_input只在按Enter时返回非None）
+        if linmo_user_input:
+            st.session_state.linmo_is_processing = True
+            
+            # 添加用户消息到历史
+            st.session_state.linmo_chat_history.append({
+                "role": "user",
+                "content": linmo_user_input
+            })
+            
+            # 构建完整的对话上下文
+            # System Prompt + 历史对话 + 当前输入
+            messages_context = ""
+            for msg in st.session_state.linmo_chat_history:
+                if msg["role"] == "user":
+                    messages_context += f"\n\n【用户】\n{msg['content']}"
+                else:
+                    messages_context += f"\n\n【Linmo】\n{msg['content']}"
+            
+            full_prompt = f"""请基于以下对话历史继续引导用户：
+{messages_context}
+
+请以思路引导助手Linmo的身份回复，严格按照输出格式要求（思考与反馈、Mermaid思维导图、引导追问）进行回复。"""
+            
+            # 流式生成回复
+            st.markdown("#### 🤖 Linmo正在思考...")
+            
+            # 思考过程容器
+            thinking_expander = st.expander("💭 查看模型思考过程", expanded=False)
+            with thinking_expander:
+                thinking_container = st.empty()
+            
+            response_container = st.empty()
+            full_response = ""
+            thinking_text = ""
+            
+            for chunk in call_gemini_stream(full_prompt, LINMO_SYSTEM_PROMPT):
+                if chunk["type"] == "text":
+                    full_response += chunk["content"]
+                    response_container.markdown(full_response + " ▌")
+                elif chunk["type"] == "thinking":
+                    thinking_text += chunk["content"]
+                    with thinking_expander:
+                        thinking_container.markdown(thinking_text)
+                elif chunk["type"] == "error":
+                    st.error(f"生成失败: {chunk['content']}")
+                    break
+            
+            if full_response:
+                response_container.markdown(full_response)
+                # 添加AI回复到历史
+                st.session_state.linmo_chat_history.append({
+                    "role": "assistant",
+                    "content": full_response
+                })
+            
+            st.session_state.linmo_is_processing = False
+            # 清空输入框（通过增加计数器改变key，强制重建组件）
+            st.session_state.linmo_input_key_counter += 1
+            st.rerun()
+    
+    # ========== PUBGM WoW 玩法评审模块 ==========
+    elif function_mode == "PUBGM WoW 玩法评审":
+        # 标题和清空按钮
+        title_col, clear_col = st.columns([6, 1])
+        with title_col:
+            st.markdown("### 🎮 PUBGM WoW 玩法评审")
+        with clear_col:
+            if st.button("🗑️ 清空会话", key="clear_wow_session", use_container_width=True):
+                clear_module_session("PUBGM WoW 玩法评审")
+                st.rerun()
+        
+        st.markdown("请上传 PUBG Mobile World of Wonder (WoW) 模式的游玩视频，AI 将分析玩法并给出评分。")
+        st.info("💡 提示：建议上传1-3分钟的短视频，视频越长处理时间越久。支持格式：MP4, MOV, AVI, WEBM")
+        
+        # 初始化session state
+        if "wow_review_result" not in st.session_state:
+            st.session_state.wow_review_result = ""
+        if "wow_is_processing" not in st.session_state:
+            st.session_state.wow_is_processing = False
+        if "wow_uploaded_video" not in st.session_state:
+            st.session_state.wow_uploaded_video = None
+        
+        # 视频上传区
+        uploaded_video = st.file_uploader(
+            "上传游戏视频",
+            type=['mp4', 'mov', 'avi', 'webm'],
+            key="wow_video_uploader",
+            help="支持 MP4, MOV, AVI, WEBM 格式，建议文件大小不超过200MB"
+        )
+        
+        # 开始评审按钮
+        start_review = st.button(
+            "🎬 开始AI评审",
+            key="wow_start_review",
+            type="primary",
+            disabled=uploaded_video is None or st.session_state.wow_is_processing
+        )
+        
+        # 处理评审逻辑
+        if start_review and uploaded_video and not st.session_state.wow_is_processing:
+            st.session_state.wow_is_processing = True
+            st.session_state.wow_review_result = ""
+            
+            # WoW 评审专用的 System Prompt
+            WOW_REVIEW_PROMPT = """Role: 你是一位资深的 PUBG Mobile 游戏评测专家，专注于 "World of Wonder" (WoW) UGC 编辑器模式的玩法评审。你拥有敏锐的游戏设计嗅觉，能通过观看视频快速理解核心机制。请用中文回答。
+
+Task: 请仔细观看上传的视频，分析该 UGC 地图的玩法，并输出一份专业的评审报告。
+
+Output Format (Markdown):
+
+# 🎮 PUBGM WoW 玩法评审报告
+
+## 1. 玩法简述 (Gameplay Summary)
+[请在此处用简练的语言描述这个地图是怎么玩的。包括：胜利条件、核心机制、玩家主要在做什么。]
+
+## 2. 维度评分 (Scoring)
+请基于 0-10 分进行打分，并给出简短的理由。
+
+| 维度 | 评分 (0-10) | 评价理由 |
+| :--- | :--- | :--- |
+| **创新性 (Innovation)** | [x.x] | [是否脱离了常规玩法？机制是否新颖？] |
+| **场景美观性 (Aesthetics)** | [x.x] | [地图搭建是否精细？光影、色彩和建筑结构如何？] |
+| **关卡设计 (Level Design)** | [x.x] | [流程是否合理？难度曲线如何？是否有引导？] |
+| **游戏完整性 (Completeness)** | [x.x] | [UI是否完善？是否有明显Bug？体验是否闭环？] |
+
+## 3. 综合评价 (Final Verdict)
+**最终平均分：[计算上述4项的平均分] / 10**
+
+**总结点评：**
+[请给出一段总结性的评价，指出这个作品最大的亮点是什么，以及最需要改进的一个地方。]
+"""
+            
+            with st.spinner("正在上传视频并进行AI分析，请稍候...（视频越长耗时越久）"):
+                temp_file_path = None
+                uploaded_file_obj = None
+                
+                try:
+                    # 创建 Client 实例
+                    client = genai.Client(api_key=st.session_state.api_key)
+                    
+                    # 1. 临时保存视频文件
+                    suffix = "." + uploaded_video.name.split(".")[-1].lower()
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                        tmp_file.write(uploaded_video.read())
+                        temp_file_path = tmp_file.name
+                    
+                    st.info("📤 正在上传视频到AI服务...")
+                    
+                    # 2. 上传视频到 Gemini File API (使用 client.files.upload)
+                    uploaded_file_obj = client.files.upload(
+                        file=temp_file_path,
+                        config={"display_name": "WoW_Gameplay"}
+                    )
+                    
+                    st.info("⏳ 视频正在处理中，请耐心等待...")
+                    
+                    # 3. 等待视频处理完成
+                    while uploaded_file_obj.state.name == "PROCESSING":
+                        time.sleep(2)
+                        uploaded_file_obj = client.files.get(name=uploaded_file_obj.name)
+                    
+                    if uploaded_file_obj.state.name == "FAILED":
+                        st.error("❌ 视频处理失败，请尝试上传其他视频。")
+                        st.session_state.wow_is_processing = False
+                    elif uploaded_file_obj.state.name == "ACTIVE":
+                        st.info("🤖 AI 正在分析视频内容...")
+                        
+                        # 4. 调用模型生成评审报告
+                        # 获取当前选择的模型
+                        current_model = st.session_state.get("selected_model", "gemini-2.0-flash")
+                        
+                        response = client.models.generate_content(
+                            model=current_model,
+                            contents=[uploaded_file_obj, WOW_REVIEW_PROMPT]
+                        )
+                        
+                        if response and response.text:
+                            st.session_state.wow_review_result = response.text
+                            st.success("✅ 评审完成！")
+                        else:
+                            st.error("❌ AI 未能生成评审结果，请重试。")
+                    else:
+                        st.error(f"❌ 视频状态异常: {uploaded_file_obj.state.name}")
+                
+                except Exception as e:
+                    st.error(f"❌ 评审过程中出错: {str(e)}")
+                
+                finally:
+                    # 5. 清理：删除本地临时文件
+                    if temp_file_path and os.path.exists(temp_file_path):
+                        try:
+                            os.remove(temp_file_path)
+                        except:
+                            pass
+                    
+                    # 可选：删除云端文件
+                    if uploaded_file_obj:
+                        try:
+                            client.files.delete(name=uploaded_file_obj.name)
+                        except:
+                            pass
+                    
+                    st.session_state.wow_is_processing = False
+        
+        # 显示评审结果
+        if st.session_state.wow_review_result:
+            st.markdown("---")
+            st.markdown("## 📋 评审报告")
+            with st.chat_message("assistant", avatar="🎮"):
+                st.markdown(st.session_state.wow_review_result)
+            
+            # 复制按钮
+            st.download_button(
+                label="📥 下载评审报告",
+                data=st.session_state.wow_review_result,
+                file_name=f"WoW_Review_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown"
             )
     
     # 页脚
